@@ -4,9 +4,6 @@ Eine Home Assistant Lovelace Custom Card im Stil eines Linux-Ressourcenmonitors.
 Zeigt CPU-, RAM/Swap-Auslastung sowie Netzwerk-Ein-/Ausgang als Live-Liniendiagramme
 mit Achsen und Gitternetz, plus optionaler Temperatur-Anzeige oben rechts.
 
-<img width="440" height="446" alt="image" src="https://github.com/user-attachments/assets/c971250c-509b-447a-91f0-403145ccecda" />
-<img width="435" height="628" alt="image" src="https://github.com/user-attachments/assets/1ff203d8-6023-4990-bc43-febb269f4db0" />
-
 ## Installation
 
 ### Manuell
