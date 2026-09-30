@@ -19,6 +19,27 @@
  *   network_in: sensor.network_in_eth0
  *   network_out: sensor.network_out_eth0
  *   temperature: sensor.processor_temperature   # optional
+ *   processes: sensor.top_processes              # optional, siehe unten
+ * processes_attribute: processes   # optional, Name des Attributs mit der Prozessliste (Default: "processes")
+ * show_processes: true             # optional, Prozess-Button ein-/ausblenden
+ *
+ * Lokalisierung: Die Karte zeigt Texte auf Deutsch, wenn hass.language "de"
+ * ist, sonst auf Englisch (siehe STRINGS weiter unten).
+ *
+ * Prozess-Popup (entities.processes):
+ * Erwartet einen Sensor, dessen Attribut (processes_attribute, Default
+ * "processes") eine Liste von Objekten { pid, name, cpu, mem } enthält.
+ * Erzeugbar z. B. mit dem beiliegenden Skript top_processes.sh über einen
+ * command_line-Sensor:
+ *
+ * command_line:
+ *   - sensor:
+ *       name: Top Processes
+ *       command: "bash /config/scripts/top_processes.sh"
+ *       scan_interval: 10
+ *       json_attributes:
+ *         - processes
+ *       value_template: "{{ value_json.processes | length }}"
  */
 
 const DEFAULT_MINUTES = 10;
@@ -49,6 +70,122 @@ const CORE_COLORS = [
   "#607d8b",
 ];
 
+// Übersetzungen: Deutsch für hass.language === "de", Englisch als Fallback
+// für alle anderen Sprachen.
+const STRINGS = {
+  de: {
+    now: "jetzt",
+    cpu: "CPU",
+    cpu_cores: "CPU Cores",
+    ram_swap: "RAM / Swap",
+    ram: "RAM",
+    swap: "Swap",
+    network: "Netzwerk",
+    network_in: "Eingang",
+    network_out: "Ausgang",
+    core: "Core",
+    processes: "Prozesse",
+    process_name: "Prozess",
+    process_pid: "PID",
+    process_cpu: "CPU %",
+    process_ram: "RAM %",
+    sort_by_cpu: "Nach CPU sortieren",
+    sort_by_ram: "Nach RAM sortieren",
+    close: "Schließen",
+    no_data: "Keine Daten",
+    editor_title: "Titel",
+    editor_minutes: "Zeitfenster der Graphen (Minuten)",
+    editor_visibility: "Sichtbarkeit",
+    editor_visibility_hint:
+      "Bestimmt, welche Graphen auf dieser Karte angezeigt werden – unabhängig davon, ob die zugehörigen Entities konfiguriert sind.",
+    editor_entities: "Entities",
+    editor_entities_hint:
+      "Netzwerk, Temperatur und Prozesse sind optional – leer lassen, um den jeweiligen Graphen/Button auszublenden.",
+    editor_cores: "CPU Cores (optional)",
+    editor_cores_hint:
+      "Zeigt einen Verlauf pro Core unter dem CPU-Graphen, z. B. aus eigenen command_line-/Template-Sensoren.",
+    editor_add_core: "+ Core hinzufügen",
+    editor_remove_core: "Core entfernen",
+    editor_thresholds_cpu_ram: "Schwellenwerte CPU / RAM (%)",
+    editor_warning: "Warnung",
+    editor_critical: "Kritisch",
+    editor_thresholds_temp: "Schwellenwerte Temperatur",
+    field_cpu: "CPU-Auslastung",
+    field_memory: "RAM-Auslastung",
+    field_swap: "Swap-Auslastung",
+    field_network_in: "Netzwerk Eingang (optional)",
+    field_network_out: "Netzwerk Ausgang (optional)",
+    field_temperature: "Temperatur (optional)",
+    field_processes: "Prozesse (optional)",
+    vis_cpu: "CPU-Graph anzeigen",
+    vis_cores: "CPU-Cores-Graph anzeigen",
+    vis_memory: "RAM/Swap-Graph anzeigen",
+    vis_network: "Netzwerk-Graph anzeigen",
+    vis_temperature: "Temperatur-Badge anzeigen",
+    vis_processes: "Prozess-Button anzeigen",
+  },
+  en: {
+    now: "now",
+    cpu: "CPU",
+    cpu_cores: "CPU Cores",
+    ram_swap: "RAM / Swap",
+    ram: "RAM",
+    swap: "Swap",
+    network: "Network",
+    network_in: "In",
+    network_out: "Out",
+    core: "Core",
+    processes: "Processes",
+    process_name: "Process",
+    process_pid: "PID",
+    process_cpu: "CPU %",
+    process_ram: "RAM %",
+    sort_by_cpu: "Sort by CPU",
+    sort_by_ram: "Sort by RAM",
+    close: "Close",
+    no_data: "No data",
+    editor_title: "Title",
+    editor_minutes: "Chart time window (minutes)",
+    editor_visibility: "Visibility",
+    editor_visibility_hint:
+      "Controls which charts are shown on this card, regardless of whether the matching entities are configured.",
+    editor_entities: "Entities",
+    editor_entities_hint:
+      "Network, temperature and processes are optional — leave blank to hide the matching chart/button.",
+    editor_cores: "CPU Cores (optional)",
+    editor_cores_hint:
+      "Shows a history per core below the CPU chart, e.g. from your own command_line/template sensors.",
+    editor_add_core: "+ Add core",
+    editor_remove_core: "Remove core",
+    editor_thresholds_cpu_ram: "CPU / RAM thresholds (%)",
+    editor_warning: "Warning",
+    editor_critical: "Critical",
+    editor_thresholds_temp: "Temperature thresholds",
+    field_cpu: "CPU usage",
+    field_memory: "RAM usage",
+    field_swap: "Swap usage",
+    field_network_in: "Network in (optional)",
+    field_network_out: "Network out (optional)",
+    field_temperature: "Temperature (optional)",
+    field_processes: "Processes (optional)",
+    vis_cpu: "Show CPU chart",
+    vis_cores: "Show CPU cores chart",
+    vis_memory: "Show RAM/Swap chart",
+    vis_network: "Show network chart",
+    vis_temperature: "Show temperature badge",
+    vis_processes: "Show processes button",
+  },
+};
+
+function langFor(hass) {
+  return hass && hass.language === "de" ? "de" : "en";
+}
+
+function t(lang, key) {
+  const dict = STRINGS[lang] || STRINGS.en;
+  return dict[key] !== undefined ? dict[key] : STRINGS.en[key] !== undefined ? STRINGS.en[key] : key;
+}
+
 function statusColor(value, thresholds) {
   if (value >= thresholds.critical) return COLOR_CRIT;
   if (value >= thresholds.warning) return COLOR_WARN;
@@ -71,9 +208,9 @@ function niceMax(value) {
   return nice * pow;
 }
 
-function formatTimeOffset(msAgo) {
+function formatTimeOffset(msAgo, lang) {
   const sec = Math.round(msAgo / 1000);
-  if (sec <= 0) return "jetzt";
+  if (sec <= 0) return t(lang, "now");
   if (sec < 60) return `-${sec}s`;
   const min = Math.round(sec / 60);
   return `-${min}min`;
@@ -94,6 +231,14 @@ class ResourceMonitorCard extends HTMLElement {
     this._historyRequested = false;
     this._lastRender = 0;
     this._resizeObserver = null;
+    this._lang = "en";
+    this._domBuilt = false;
+    this._procDialogOpen = false;
+    this._procSort = "cpu";
+  }
+
+  _t(key) {
+    return t(this._lang, key);
   }
 
   static getConfigElement() {
@@ -123,6 +268,7 @@ class ResourceMonitorCard extends HTMLElement {
         network_in: findEntity(["network_in"]),
         network_out: findEntity(["network_out"]),
         temperature: findEntity(["temperature"]),
+        processes: findEntity(["top_processes", "processes"]),
       },
     };
   }
@@ -154,16 +300,21 @@ class ResourceMonitorCard extends HTMLElement {
     this._cpuCores = Array.isArray(config.entities.cpu_cores)
       ? config.entities.cpu_cores.filter(Boolean)
       : [];
+    this._processesEntity = config.entities.processes || "";
+    this._processesAttribute = config.processes_attribute || "processes";
 
     this._showCpu = config.show_cpu !== false;
     this._showMemory = config.show_memory !== false;
     this._showNetwork = config.show_network !== false && (this._hasNetworkIn || this._hasNetworkOut);
     this._showCores = config.show_cores !== false && this._cpuCores.length > 0;
     this._showTemperature = config.show_temperature !== false;
+    this._showProcesses = config.show_processes !== false && !!this._processesEntity;
 
     this._entityToKey = {};
     Object.entries(config.entities).forEach(([key, id]) => {
-      if (id && key !== "temperature" && key !== "cpu_cores") this._entityToKey[id] = key;
+      if (id && key !== "temperature" && key !== "cpu_cores" && key !== "processes") {
+        this._entityToKey[id] = key;
+      }
     });
     this._cpuCores.forEach((id, i) => {
       this._entityToKey[id] = `core_${i}`;
@@ -201,8 +352,14 @@ class ResourceMonitorCard extends HTMLElement {
   }
 
   set hass(hass) {
+    const prevLang = this._lang;
+    this._lang = langFor(hass);
     this._hass = hass;
     if (!this._config) return;
+
+    if (this._domBuilt && this._lang !== prevLang) {
+      this._buildDom();
+    }
 
     if (!this._historyRequested) {
       this._historyRequested = true;
@@ -232,6 +389,10 @@ class ResourceMonitorCard extends HTMLElement {
     this._trimBuffers();
 
     this._updateTempBadge();
+
+    if (this._showProcesses && this._procDialogOpen) {
+      this._renderProcessTable();
+    }
 
     if (now - this._lastRender > 500) {
       this._lastRender = now;
@@ -374,6 +535,91 @@ class ResourceMonitorCard extends HTMLElement {
           display: inline-block;
           flex: none;
         }
+        .processes-btn {
+          border: 1px solid var(--divider-color, #ccc);
+          background: transparent;
+          color: var(--primary-text-color, #000);
+          border-radius: 12px;
+          padding: 3px 10px;
+          font-size: 0.8em;
+          cursor: pointer;
+        }
+        .processes-btn:hover { background: var(--secondary-background-color, rgba(128,128,128,0.1)); }
+        .header-right { display: flex; align-items: center; gap: 8px; }
+        .proc-dialog-overlay {
+          position: fixed;
+          inset: 0;
+          background: rgba(0,0,0,0.5);
+          z-index: 1000;
+          display: none;
+          align-items: center;
+          justify-content: center;
+        }
+        .proc-dialog {
+          background: var(--card-background-color, #fff);
+          color: var(--primary-text-color, #000);
+          border-radius: 8px;
+          width: min(560px, 92vw);
+          max-height: 80vh;
+          display: flex;
+          flex-direction: column;
+          box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+        }
+        .proc-dialog-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 12px 16px;
+          border-bottom: 1px solid var(--divider-color, #e0e0e0);
+          font-weight: 600;
+        }
+        .proc-dialog-header button {
+          border: none;
+          background: transparent;
+          color: var(--secondary-text-color, #666);
+          font-size: 0.9em;
+          cursor: pointer;
+          padding: 4px 8px;
+        }
+        .proc-sort-row {
+          display: flex;
+          gap: 8px;
+          padding: 10px 16px;
+          border-bottom: 1px solid var(--divider-color, #e0e0e0);
+        }
+        .proc-sort-btn {
+          border: 1px solid var(--divider-color, #ccc);
+          background: transparent;
+          color: var(--primary-text-color, #000);
+          border-radius: 12px;
+          padding: 4px 10px;
+          font-size: 0.8em;
+          cursor: pointer;
+        }
+        .proc-sort-btn.active {
+          background: var(--primary-color, #03a9f4);
+          color: #fff;
+          border-color: transparent;
+        }
+        .proc-table-wrap { overflow-y: auto; padding: 0 16px 16px; }
+        .proc-table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+        .proc-table th {
+          position: sticky;
+          top: 0;
+          background: var(--card-background-color, #fff);
+          text-align: left;
+          padding: 6px 8px;
+          color: var(--secondary-text-color, #666);
+          font-weight: 600;
+          border-bottom: 1px solid var(--divider-color, #e0e0e0);
+        }
+        .proc-table td {
+          padding: 5px 8px;
+          border-bottom: 1px solid var(--divider-color, #eee);
+          font-variant-numeric: tabular-nums;
+        }
+        .proc-table th:not(:first-child), .proc-table td:not(:first-child) { text-align: right; }
+        .proc-empty { text-align: center; color: var(--secondary-text-color, #666); padding: 16px; }
       </style>
     `;
 
@@ -382,12 +628,15 @@ class ResourceMonitorCard extends HTMLElement {
       <ha-card>
         <div class="header">
           <span class="title">${this._config.title}</span>
-          <span class="temp-badge" id="temp-badge"></span>
+          <div class="header-right">
+            <button class="processes-btn" id="processes-btn" style="${this._showProcesses ? "" : "display:none;"}">${this._t("processes")}</button>
+            <span class="temp-badge" id="temp-badge"></span>
+          </div>
         </div>
         <div class="stack">
           <div class="metric" id="metric-cpu" style="${this._showCpu ? "" : "display:none;"}">
             <div class="metric-header">
-              <span class="metric-label">CPU</span>
+              <span class="metric-label">${this._t("cpu")}</span>
               <span class="metric-value" id="val-cpu"></span>
             </div>
             <canvas id="canvas-cpu"></canvas>
@@ -395,7 +644,7 @@ class ResourceMonitorCard extends HTMLElement {
 
           <div class="metric" id="metric-cores" style="${this._showCores ? "" : "display:none;"}">
             <div class="metric-header">
-              <span class="metric-label">CPU Cores</span>
+              <span class="metric-label">${this._t("cpu_cores")}</span>
               <span class="metric-value" id="val-cores"></span>
             </div>
             <canvas id="canvas-cores"></canvas>
@@ -404,35 +653,144 @@ class ResourceMonitorCard extends HTMLElement {
 
           <div class="metric" id="metric-memory" style="${this._showMemory ? "" : "display:none;"}">
             <div class="metric-header">
-              <span class="metric-label">RAM / Swap</span>
+              <span class="metric-label">${this._t("ram_swap")}</span>
               <span class="metric-value" id="val-memory"></span>
             </div>
             <canvas id="canvas-memory"></canvas>
             <div class="legend">
-              <span class="ram">RAM</span>
-              <span class="swap">Swap</span>
+              <span class="ram">${this._t("ram")}</span>
+              <span class="swap">${this._t("swap")}</span>
             </div>
           </div>
 
           <div class="metric" id="metric-network" style="${this._showNetwork ? "" : "display:none;"}">
             <div class="metric-header">
-              <span class="metric-label">Netzwerk</span>
+              <span class="metric-label">${this._t("network")}</span>
               <span class="metric-value" id="val-network"></span>
             </div>
             <canvas id="canvas-network"></canvas>
             <div class="legend">
-              <span class="in" style="${this._hasNetworkIn ? "" : "display:none;"}">Eingang</span>
-              <span class="out" style="${this._hasNetworkOut ? "" : "display:none;"}">Ausgang</span>
+              <span class="in" style="${this._hasNetworkIn ? "" : "display:none;"}">${this._t("network_in")}</span>
+              <span class="out" style="${this._hasNetworkOut ? "" : "display:none;"}">${this._t("network_out")}</span>
             </div>
           </div>
         </div>
       </ha-card>
+
+      <div class="proc-dialog-overlay" id="proc-overlay">
+        <div class="proc-dialog">
+          <div class="proc-dialog-header">
+            <span>${this._t("processes")}</span>
+            <button id="proc-close">${this._t("close")}</button>
+          </div>
+          <div class="proc-sort-row">
+            <button class="proc-sort-btn" id="proc-sort-cpu">${this._t("sort_by_cpu")}</button>
+            <button class="proc-sort-btn" id="proc-sort-ram">${this._t("sort_by_ram")}</button>
+          </div>
+          <div class="proc-table-wrap">
+            <table class="proc-table">
+              <thead>
+                <tr>
+                  <th>${this._t("process_name")}</th>
+                  <th>${this._t("process_pid")}</th>
+                  <th>${this._t("process_cpu")}</th>
+                  <th>${this._t("process_ram")}</th>
+                </tr>
+              </thead>
+              <tbody id="proc-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     `;
 
     // Erste Größenanpassung nach dem Layout-Tick
     requestAnimationFrame(() => this._resizeCanvases());
 
     this._buildCoreLegend();
+    this._wireProcessDialog();
+    this._domBuilt = true;
+  }
+
+  _wireProcessDialog() {
+    const openBtn = this.shadowRoot.getElementById("processes-btn");
+    const closeBtn = this.shadowRoot.getElementById("proc-close");
+    const overlay = this.shadowRoot.getElementById("proc-overlay");
+    const sortCpuBtn = this.shadowRoot.getElementById("proc-sort-cpu");
+    const sortRamBtn = this.shadowRoot.getElementById("proc-sort-ram");
+
+    if (openBtn) openBtn.addEventListener("click", () => this._openProcessDialog());
+    if (closeBtn) closeBtn.addEventListener("click", () => this._closeProcessDialog());
+    if (overlay) {
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) this._closeProcessDialog();
+      });
+    }
+    if (sortCpuBtn) sortCpuBtn.addEventListener("click", () => this._setProcessSort("cpu"));
+    if (sortRamBtn) sortRamBtn.addEventListener("click", () => this._setProcessSort("ram"));
+    this._updateProcessSortButtons();
+  }
+
+  _openProcessDialog() {
+    const overlay = this.shadowRoot.getElementById("proc-overlay");
+    if (!overlay) return;
+    this._procDialogOpen = true;
+    overlay.style.display = "flex";
+    this._renderProcessTable();
+  }
+
+  _closeProcessDialog() {
+    const overlay = this.shadowRoot.getElementById("proc-overlay");
+    if (!overlay) return;
+    this._procDialogOpen = false;
+    overlay.style.display = "none";
+  }
+
+  _setProcessSort(mode) {
+    this._procSort = mode;
+    this._updateProcessSortButtons();
+    this._renderProcessTable();
+  }
+
+  _updateProcessSortButtons() {
+    const sortCpuBtn = this.shadowRoot.getElementById("proc-sort-cpu");
+    const sortRamBtn = this.shadowRoot.getElementById("proc-sort-ram");
+    if (sortCpuBtn) sortCpuBtn.classList.toggle("active", this._procSort === "cpu");
+    if (sortRamBtn) sortRamBtn.classList.toggle("active", this._procSort === "ram");
+  }
+
+  _renderProcessTable() {
+    const tbody = this.shadowRoot.getElementById("proc-tbody");
+    if (!tbody || !this._hass) return;
+    const state = this._hass.states[this._processesEntity];
+    const list = (state && state.attributes && state.attributes[this._processesAttribute]) || [];
+    const sorted = Array.isArray(list)
+      ? [...list].sort((a, b) => (Number(b[this._procSort]) || 0) - (Number(a[this._procSort]) || 0))
+      : [];
+
+    if (!sorted.length) {
+      tbody.innerHTML = `<tr><td colspan="4" class="proc-empty">${this._t("no_data")}</td></tr>`;
+      return;
+    }
+
+    tbody.innerHTML = sorted
+      .map((p) => {
+        const cpu = p.cpu !== undefined && p.cpu !== null ? `${Number(p.cpu).toFixed(1)}%` : "–";
+        const mem = p.mem !== undefined && p.mem !== null ? `${Number(p.mem).toFixed(1)}%` : "–";
+        return `
+          <tr>
+            <td>${this._escape(p.name ?? "–")}</td>
+            <td>${p.pid ?? "–"}</td>
+            <td>${cpu}</td>
+            <td>${mem}</td>
+          </tr>
+        `;
+      })
+      .join("");
+  }
+
+  _escape(str) {
+    return String(str).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
   _buildCoreLegend() {
@@ -443,7 +801,7 @@ class ResourceMonitorCard extends HTMLElement {
         (_, i) => `
           <span class="core-legend-item">
             <span class="dot" style="background:${CORE_COLORS[i % CORE_COLORS.length]}"></span>
-            <span class="core-legend-text" data-core-index="${i}">Core ${i}: –</span>
+            <span class="core-legend-text" data-core-index="${i}">${this._t("core")} ${i}: –</span>
           </span>
         `
       )
@@ -512,7 +870,7 @@ class ResourceMonitorCard extends HTMLElement {
       const el = this.shadowRoot.querySelector(`[data-core-index="${i}"]`);
       if (!el) return;
       const v = values[i];
-      el.textContent = `Core ${i}: ${v !== null ? v.toFixed(0) + "%" : "–"}`;
+      el.textContent = `${this._t("core")} ${i}: ${v !== null ? v.toFixed(0) + "%" : "–"}`;
     });
 
     const series = this._cpuCores.map((_, i) => ({
@@ -561,7 +919,7 @@ class ResourceMonitorCard extends HTMLElement {
     const valueEl = this.shadowRoot.getElementById("val-memory");
     const ramTxt = ram !== null ? `${ram.toFixed(1)}%` : "–";
     const swapTxt = swap !== null ? `${swap.toFixed(1)}%` : "–";
-    valueEl.textContent = `RAM ${ramTxt} · Swap ${swapTxt}`;
+    valueEl.textContent = `${this._t("ram")} ${ramTxt} · ${this._t("swap")} ${swapTxt}`;
     valueEl.style.color = ramColor;
 
     this._drawChart(canvas, {
@@ -668,7 +1026,7 @@ class ResourceMonitorCard extends HTMLElement {
       ctx.stroke();
       ctx.textBaseline = "top";
       ctx.textAlign = frac === 0 ? "left" : frac === 1 ? "right" : "center";
-      const label = formatTimeOffset(windowMs * (1 - frac));
+      const label = formatTimeOffset(windowMs * (1 - frac), this._lang);
       ctx.fillText(label, x, py0 + ph + 3 * dpr);
     });
 
@@ -709,20 +1067,22 @@ customElements.define("resource-monitor-card", ResourceMonitorCard);
  * Lovelace-UI bearbeitet wird (kein YAML-Modus nötig).
  */
 const ENTITY_FIELDS = [
-  { key: "cpu", label: "CPU-Auslastung", required: true },
-  { key: "memory", label: "RAM-Auslastung", required: true },
-  { key: "swap", label: "Swap-Auslastung", required: true },
-  { key: "network_in", label: "Netzwerk Eingang (optional)", required: false },
-  { key: "network_out", label: "Netzwerk Ausgang (optional)", required: false },
-  { key: "temperature", label: "Temperatur (optional)", required: false },
+  { key: "cpu", labelKey: "field_cpu", required: true },
+  { key: "memory", labelKey: "field_memory", required: true },
+  { key: "swap", labelKey: "field_swap", required: true },
+  { key: "network_in", labelKey: "field_network_in", required: false },
+  { key: "network_out", labelKey: "field_network_out", required: false },
+  { key: "temperature", labelKey: "field_temperature", required: false },
+  { key: "processes", labelKey: "field_processes", required: false },
 ];
 
 const VISIBILITY_FIELDS = [
-  { key: "show_cpu", label: "CPU-Graph anzeigen" },
-  { key: "show_cores", label: "CPU-Cores-Graph anzeigen" },
-  { key: "show_memory", label: "RAM/Swap-Graph anzeigen" },
-  { key: "show_network", label: "Netzwerk-Graph anzeigen" },
-  { key: "show_temperature", label: "Temperatur-Badge anzeigen" },
+  { key: "show_cpu", labelKey: "vis_cpu" },
+  { key: "show_cores", labelKey: "vis_cores" },
+  { key: "show_memory", labelKey: "vis_memory" },
+  { key: "show_network", labelKey: "vis_network" },
+  { key: "show_temperature", labelKey: "vis_temperature" },
+  { key: "show_processes", labelKey: "vis_processes" },
 ];
 
 class ResourceMonitorCardEditor extends HTMLElement {
@@ -732,6 +1092,11 @@ class ResourceMonitorCardEditor extends HTMLElement {
     this._config = null;
     this._hass = null;
     this._rendered = false;
+    this._lang = "en";
+  }
+
+  _t(key) {
+    return t(this._lang, key);
   }
 
   setConfig(config) {
@@ -753,7 +1118,13 @@ class ResourceMonitorCardEditor extends HTMLElement {
   }
 
   set hass(hass) {
+    const prevLang = this._lang;
+    this._lang = langFor(hass);
     this._hass = hass;
+    if (this._rendered && this._lang !== prevLang) {
+      this._render();
+      return;
+    }
     // Bereits vorhandene Entity-Picker mit hass versorgen, ohne alles neu zu bauen
     if (!this.shadowRoot) return;
     ENTITY_FIELDS.forEach(({ key }) => {
@@ -868,46 +1239,46 @@ class ResourceMonitorCardEditor extends HTMLElement {
       </style>
       <div class="form">
         <div class="row">
-          <label>Titel</label>
+          <label>${this._t("editor_title")}</label>
           <input type="text" id="title" value="${cfg.title}">
         </div>
         <div class="row">
-          <label>Zeitfenster der Graphen (Minuten)</label>
+          <label>${this._t("editor_minutes")}</label>
           <input type="number" id="minutes_to_show" min="1" value="${cfg.minutes_to_show}">
         </div>
 
-        <div class="section-title">Sichtbarkeit</div>
-        <div class="hint">Bestimmt, welche Graphen auf dieser Karte angezeigt werden – unabhängig davon, ob die zugehörigen Entities konfiguriert sind.</div>
+        <div class="section-title">${this._t("editor_visibility")}</div>
+        <div class="hint">${this._t("editor_visibility_hint")}</div>
         ${VISIBILITY_FIELDS.map(
           (f) => `
             <div class="checkbox-row">
               <input type="checkbox" id="${f.key}" ${cfg[f.key] !== false ? "checked" : ""}>
-              <label for="${f.key}">${f.label}</label>
+              <label for="${f.key}">${this._t(f.labelKey)}</label>
             </div>
           `
         ).join("")}
 
-        <div class="section-title">Entities</div>
+        <div class="section-title">${this._t("editor_entities")}</div>
         ${ENTITY_FIELDS.map(
-          (f) => `<div class="row" data-entity-field="${f.key}"><label>${f.label}</label></div>`
+          (f) => `<div class="row" data-entity-field="${f.key}"><label>${this._t(f.labelKey)}</label></div>`
         ).join("")}
-        <div class="hint">Netzwerk und Temperatur sind optional – leer lassen, um den jeweiligen Graphen bzw. das Badge auszublenden.</div>
+        <div class="hint">${this._t("editor_entities_hint")}</div>
 
-        <div class="section-title">CPU Cores (optional)</div>
-        <div class="hint">Zeigt einen Verlauf pro Core unter dem CPU-Graphen, z. B. aus eigenen command_line-/Template-Sensoren.</div>
+        <div class="section-title">${this._t("editor_cores")}</div>
+        <div class="hint">${this._t("editor_cores_hint")}</div>
         <div id="core-rows"></div>
-        <button type="button" class="add-core-btn" id="add-core-btn">+ Core hinzufügen</button>
+        <button type="button" class="add-core-btn" id="add-core-btn">${this._t("editor_add_core")}</button>
 
-        <div class="section-title">Schwellenwerte CPU / RAM (%)</div>
+        <div class="section-title">${this._t("editor_thresholds_cpu_ram")}</div>
         <div class="row-inline">
-          <div class="row"><label>Warnung</label><input type="number" id="th-warning" value="${th.warning}"></div>
-          <div class="row"><label>Kritisch</label><input type="number" id="th-critical" value="${th.critical}"></div>
+          <div class="row"><label>${this._t("editor_warning")}</label><input type="number" id="th-warning" value="${th.warning}"></div>
+          <div class="row"><label>${this._t("editor_critical")}</label><input type="number" id="th-critical" value="${th.critical}"></div>
         </div>
 
-        <div class="section-title">Schwellenwerte Temperatur</div>
+        <div class="section-title">${this._t("editor_thresholds_temp")}</div>
         <div class="row-inline">
-          <div class="row"><label>Warnung</label><input type="number" id="tth-warning" value="${tth.warning}"></div>
-          <div class="row"><label>Kritisch</label><input type="number" id="tth-critical" value="${tth.critical}"></div>
+          <div class="row"><label>${this._t("editor_warning")}</label><input type="number" id="tth-warning" value="${tth.warning}"></div>
+          <div class="row"><label>${this._t("editor_critical")}</label><input type="number" id="tth-critical" value="${tth.critical}"></div>
         </div>
       </div>
     `;
@@ -973,7 +1344,7 @@ class ResourceMonitorCardEditor extends HTMLElement {
         input.value = entityId || "";
         input.allowCustomEntity = true;
         input.includeDomains = ["sensor"];
-        input.label = `Core ${index}`;
+        input.label = `${this._t("core")} ${index}`;
         input.addEventListener("value-changed", (e) => {
           e.stopPropagation();
           this._updateCore(index, e.detail.value);
@@ -988,7 +1359,7 @@ class ResourceMonitorCardEditor extends HTMLElement {
 
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
-      removeBtn.title = "Core entfernen";
+      removeBtn.title = this._t("editor_remove_core");
       removeBtn.textContent = "✕";
       removeBtn.addEventListener("click", () => this._removeCore(index));
 

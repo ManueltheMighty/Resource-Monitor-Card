@@ -1,22 +1,27 @@
 # Resource Monitor Card
 
-Eine Home Assistant Lovelace Custom Card im Stil eines Linux-Ressourcenmonitors.
-Zeigt CPU-, RAM/Swap-Auslastung sowie Netzwerk-Ein-/Ausgang als Live-Liniendiagramme
-mit Achsen und Gitternetz, plus optionaler Temperatur-Anzeige oben rechts.
+*[Deutsche Version](README.de.md)*
+
+A Home Assistant Lovelace custom card in the style of a Linux resource monitor.
+Shows CPU, RAM/Swap usage and network in/out as live line charts with axes and
+a grid, plus an optional temperature badge and a process list popup.
+
+The card's UI text automatically follows the Home Assistant profile language:
+users with `de` see German, everyone else sees English.
 
 ## Installation
 
-### Manuell
-1. `resource-monitor-card.js` nach `config/www/resource-monitor-card/` kopieren.
-2. In Einstellungen → Dashboards → Ressourcen die Datei
-   `/local/resource-monitor-card/resource-monitor-card.js` als JavaScript-Modul hinzufügen.
+### Manual
+1. Copy `resource-monitor-card.js` to `config/www/resource-monitor-card/`.
+2. In Settings → Dashboards → Resources, add
+   `/local/resource-monitor-card/resource-monitor-card.js` as a JavaScript module.
 
-### Über HACS (nach Veröffentlichung)
-1. HACS → Frontend → „..." → Benutzerdefinierte Repositories.
-2. Repository-URL eintragen, Kategorie „Lovelace".
-3. „Resource Monitor Card" installieren, Home Assistant neu laden.
+### Via HACS
+1. HACS → Frontend → "..." → Custom repositories.
+2. Add this repository URL, category "Lovelace".
+3. Install "Resource Monitor Card", reload Home Assistant.
 
-## Konfiguration
+## Configuration
 
 ```yaml
 type: custom:resource-monitor-card
@@ -35,71 +40,79 @@ entities:
   network_in: sensor.network_in_eth0
   network_out: sensor.network_out_eth0
   temperature: sensor.processor_temperature   # optional
+  processes: sensor.top_processes             # optional
+processes_attribute: processes                # optional, default: "processes"
 ```
 
-| Option | Pflicht | Beschreibung |
+| Option | Required | Description |
 |---|---|---|
-| `title` | nein | Kartentitel (Standard: „System Monitor") |
-| `minutes_to_show` | nein | Zeitfenster der Graphen in Minuten (Standard: 10) |
-| `thresholds.warning` / `.critical` | nein | Schwellenwerte in % für CPU- und RAM-Linienfarbe (Standard: 70 / 90) |
-| `temperature_thresholds.warning` / `.critical` | nein | Schwellenwerte für die Temperatur-Badge-Farbe (Standard: 65 / 80) |
-| `entities.cpu` | ja | Entity für CPU-Auslastung in % |
-| `entities.memory` | ja | Entity für RAM-Auslastung in % |
-| `entities.swap` | ja | Entity für Swap-Auslastung in % (wird mit RAM in einem Graphen kombiniert) |
-| `entities.network_in` | nein | Entity für Netzwerk-Eingang |
-| `entities.network_out` | nein | Entity für Netzwerk-Ausgang |
-| `entities.temperature` | nein | Entity für eine Temperatur, erscheint als Badge oben rechts im Header |
-| `entities.cpu_cores` | nein | Liste von Entities für die Auslastung pro CPU-Core (eigener Verlaufsgraph) |
-| `show_cpu` | nein | CPU-Graph anzeigen (Standard: `true`) |
-| `show_cores` | nein | CPU-Cores-Graph anzeigen, sofern `entities.cpu_cores` gesetzt ist (Standard: `true`) |
-| `show_memory` | nein | RAM/Swap-Graph anzeigen (Standard: `true`) |
-| `show_network` | nein | Netzwerk-Graph anzeigen, sofern Netzwerk-Entities gesetzt sind (Standard: `true`) |
-| `show_temperature` | nein | Temperatur-Badge anzeigen, sofern `entities.temperature` gesetzt ist (Standard: `true`) |
+| `title` | no | Card title (default: "System Monitor") |
+| `minutes_to_show` | no | Chart time window in minutes (default: 10) |
+| `thresholds.warning` / `.critical` | no | Percentage thresholds for the CPU/RAM line color (default: 70 / 90) |
+| `temperature_thresholds.warning` / `.critical` | no | Thresholds for the temperature badge color (default: 65 / 80) |
+| `entities.cpu` | yes | Entity for CPU usage in % |
+| `entities.memory` | yes | Entity for RAM usage in % |
+| `entities.swap` | yes | Entity for swap usage in % (combined with RAM into one chart) |
+| `entities.network_in` | no | Entity for network in |
+| `entities.network_out` | no | Entity for network out |
+| `entities.temperature` | no | Entity for a temperature, shown as a badge top-right in the header |
+| `entities.cpu_cores` | no | List of entities for per-core CPU usage (own history chart) |
+| `entities.processes` | no | Entity whose attribute holds the process list (see below); enables the "Processes" button |
+| `processes_attribute` | no | Name of the attribute holding the process list (default: `processes`) |
+| `show_cpu` | no | Show the CPU chart (default: `true`) |
+| `show_cores` | no | Show the CPU cores chart, if `entities.cpu_cores` is set (default: `true`) |
+| `show_memory` | no | Show the RAM/Swap chart (default: `true`) |
+| `show_network` | no | Show the network chart, if network entities are set (default: `true`) |
+| `show_temperature` | no | Show the temperature badge, if `entities.temperature` is set (default: `true`) |
+| `show_processes` | no | Show the processes button, if `entities.processes` is set (default: `true`) |
 
-Jeder Graph lässt sich also unabhängig ein-/ausblenden – entweder per `show_*`-Flag
-in der YAML-Konfiguration oder im visuellen Editor unter „Sichtbarkeit". So kann
-sich jeder seine eigene Auswahl zusammenstellen, ohne Entities entfernen zu müssen.
+Every chart (and the processes button) can be toggled independently — either via
+`show_*` flags in YAML or in the visual editor under "Visibility". This lets
+everyone put together their own selection without removing entities.
 
-Netzwerk ist vollständig optional: Fehlen beide Entities, wird der Netzwerk-Graph
-komplett ausgeblendet. Ist nur eine der beiden Richtungen konfiguriert, zeigt der
-Graph nur diese Linie (die andere Legende wird ausgeblendet).
+Network is fully optional: if both entities are missing, the network chart is
+hidden entirely. If only one direction is configured, the chart shows only that
+line (the other legend entry is hidden).
 
-Die Basis-Entities stammen aus der **System Monitor** Integration
-(Einstellungen → Geräte & Dienste → Integration hinzufügen → „System Monitor").
-Für die Temperatur eignet sich z. B. ein CPU-Temperatursensor deines Systems
-oder ein anderer `sensor.*` mit numerischem Zustand.
+The base entities come from the **System Monitor** integration
+(Settings → Devices & Services → Add Integration → "System Monitor").
+For temperature, a CPU temperature sensor of your system, or any other
+numeric-state `sensor.*`, works well.
 
-## Funktionsumfang
+## Features
 
-- Drei Graphen untereinander: CPU, RAM/Swap (kombiniert), Netzwerk (Ein-/Ausgang, optional)
-- Optionaler Verlaufsgraph der Auslastung pro CPU-Kern (eigene Linie je Kern, Farblegende darunter) direkt unter dem CPU-Graphen
-- Jeder Graph mit X-/Y-Achse, Beschriftung und Gitternetzlinien im Hintergrund
-- Temperatur-Badge oben rechts im Header, farbig nach Schwellenwert
-- Linienfarbe von CPU und RAM wechselt je nach Auslastung (grün/orange/rot)
-- Beim Laden wird die Recorder-History der letzten `minutes_to_show` Minuten geladen,
-  damit der Graph nicht leer startet; danach läuft die Aktualisierung live über die
-  Zustandsänderungen der Entities weiter
-- Automatische Skalierung der Netzwerk-Y-Achse auf einen „runden" Höchstwert
-- Farben passen sich automatisch an Light/Dark-Theme an
+- Three stacked charts: CPU, RAM/Swap (combined), network (in/out, optional)
+- Optional per-core CPU usage history (one line per core, color legend below) right under the CPU chart
+- Every chart has an X/Y axis, labels and a background grid
+- Temperature badge top-right in the header, colored by threshold
+- CPU and RAM line color changes with usage (green/orange/red)
+- A "Processes" button opens a popup listing every process, sortable by CPU or
+  RAM usage, in a scrollable table (see below)
+- On load, the Recorder history for the last `minutes_to_show` minutes is
+  fetched so the chart doesn't start empty; after that it keeps updating live
+  from entity state changes
+- Automatic scaling of the network Y axis to a "nice" round maximum
+- Colors automatically adapt to the light/dark theme
+- UI language follows the Home Assistant profile (German for `de`, English otherwise)
 
-## CPU-Auslastung pro Kern (optional, via eigenem Sensor-Setup)
+## Per-core CPU usage (optional, via your own sensor setup)
 
-System Monitor liefert nur die CPU-Gesamtauslastung, keine Werte pro Kern. Mit einem
-kleinen Skript, das `/proc/stat` ausliest, lässt sich das trotzdem nachrüsten – die
-Karte zeigt die Werte dann als Balken unter dem CPU-Graphen an.
+System Monitor only provides total CPU usage, not per-core values. A small
+script that reads `/proc/stat` lets you add this anyway — the card then shows
+per-core usage as its own history chart under the CPU chart.
 
-**Voraussetzung:** Home Assistant muss auf das echte Host-`/proc` zugreifen können
-(bei Home Assistant OS, Supervised und den meisten Container-Installationen der Fall).
-Bei Docker-Installationen ohne Host-PID-Namespace zeigt das Skript ggf. nur
-Container-eigene Werte.
+**Requirement:** Home Assistant needs access to the real host `/proc`
+(true for Home Assistant OS, Supervised, and most container installs). On
+Docker installs without the host PID namespace, the script may only show
+values for the container itself.
 
-**1. Skript anlegen** unter `/config/scripts/cpu_per_core.sh` (im Repo unter
-`ha_config_snippets/cpu_per_core.sh` enthalten):
+**1. Add the script** at `/config/scripts/cpu_per_core.sh` (included in this
+repo under `ha_config_snippets/cpu_per_core.sh`):
 
 ```bash
 #!/bin/bash
-# Ermittelt die Auslastung jedes CPU-Kerns in Prozent auf Basis von /proc/stat.
-# Ausgabe: JSON-Objekt, z.B. {"cpu0": 12.3, "cpu1": 45.6}
+# Determines the usage of each CPU core in percent, based on /proc/stat.
+# Output: a JSON object, e.g. {"cpu0": 12.3, "cpu1": 45.6}
 
 snapshot() {
   awk '/^cpu[0-9]+/ {
@@ -142,14 +155,14 @@ END {
 ' <<< "$s2"
 ```
 
-Das Skript wartet intern 1 Sekunde, um aus zwei `/proc/stat`-Schnappschüssen die
-Auslastung pro Kern zu berechnen – dadurch dauert jeder Abruf ~1s, was bei
-`scan_interval: 10` oder mehr unproblematisch ist.
+The script waits 1 second internally to compute per-core usage from two
+`/proc/stat` snapshots — each call therefore takes about 1s, which is fine
+with `scan_interval: 10` or higher.
 
-**2. Sensor in `configuration.yaml`** (aktuelle Syntax: eigener `command_line:`-
-Schlüssel, **nicht** `platform: command_line` unter `sensor:` – das wird von neueren
-Home-Assistant-Versionen nicht mehr unterstützt). Anzahl der `cpuN`-Einträge an die
-eigene Kernzahl anpassen, z. B. per `nproc` ermitteln:
+**2. Sensor in `configuration.yaml`** (current syntax: a dedicated
+`command_line:` top-level key, **not** `platform: command_line` under
+`sensor:` — that's no longer supported by recent Home Assistant versions).
+Adjust the number of `cpuN` entries to your core count, e.g. via `nproc`:
 
 ```yaml
 command_line:
@@ -185,14 +198,14 @@ template:
         state: "{{ state_attr('sensor.cpu_cores_raw', 'cpu3') }}"
 ```
 
-Falls in deiner `configuration.yaml` bereits ein `template:`-Block existiert, hänge
-die neuen Einträge unter dessen `- sensor:`-Liste an, statt einen zweiten
-`template:`-Schlüssel anzulegen (YAML erlaubt pro Datei nur einen Schlüssel
-gleichen Namens auf oberster Ebene). Einen `command_line:`-Schlüssel hattest du
-vermutlich noch nicht, den kannst du einfach neu hinzufügen.
+If your `configuration.yaml` already has a `template:` block, append the new
+entries under its existing `- sensor:` list instead of adding a second
+`template:` key (YAML only allows one top-level key of the same name per
+file). You most likely don't have a `command_line:` key yet, so you can just
+add it.
 
-**3. In der Karte einbinden**, entweder per YAML oder über den visuellen Editor
-(Abschnitt „CPU Cores (optional)" → „+ Core hinzufügen"):
+**3. Add it to the card**, either via YAML or the visual editor ("CPU Cores
+(optional)" section → "+ Add core"):
 
 ```yaml
 entities:
@@ -206,29 +219,90 @@ entities:
     - sensor.cpu_core_3
 ```
 
-Ohne konfigurierte `cpu_cores` bleibt der Bereich einfach ausgeblendet.
+Without `cpu_cores` configured, this section simply stays hidden.
 
-## Visueller Editor
+## Process list popup (optional, via your own sensor setup)
 
-Die Karte lässt sich komplett über die Lovelace-UI konfigurieren (kein YAML nötig):
-Dashboard bearbeiten → Karte hinzufügen → „Resource Monitor Card" auswählen. Der
-Editor bietet Entity-Picker für alle Sensoren, eine dynamische Liste zum Hinzufügen/
-Entfernen von CPU-Kern-Sensoren, Felder für Titel und Zeitfenster sowie die
-Schwellenwerte für CPU/RAM und Temperatur. Beim erstmaligen Hinzufügen
-versucht die Karte zusätzlich, passende System-Monitor-Entities automatisch
-vorzuschlagen (`getStubConfig`).
+System Monitor doesn't expose per-process data either, so this needs the same
+kind of small helper script as the per-core chart above.
 
-Der YAML-Modus bleibt weiterhin verfügbar und identisch nutzbar (siehe oben).
+**1. Add the script** at `/config/scripts/top_processes.sh` (included in this
+repo under `ha_config_snippets/top_processes.sh`). It lists every running
+process with its PID, name, CPU % and RAM % as JSON:
 
-## Bekannte Einschränkungen
+```bash
+#!/bin/bash
+# Lists running processes with CPU and RAM usage in percent.
+# Output: a JSON object with a "processes" list, sorted by CPU descending.
+# {"processes": [{"pid": 1234, "name": "chromium", "cpu": 12.3, "mem": 5.6}, ...]}
 
-- Die History wird per REST-API (`history/period`) einmalig beim Laden der Karte
-  abgerufen; schlägt der Abruf fehl (z. B. Berechtigungen, HA-Version), läuft die
-  Karte trotzdem weiter, startet dann aber mit leeren Graphen.
-- Der Editor nutzt `ha-entity-picker` aus dem HA-Frontend; ist diese Komponente aus
-  irgendeinem Grund nicht verfügbar, fällt der Editor automatisch auf einfache
-  Textfelder für die Entity-IDs zurück.
+ps -eo pid,comm,%cpu,%mem --no-headers --sort=-%cpu | awk '
+BEGIN { printf "{\"processes\": [" }
+{
+  pid = $1; name = $2; cpu = $3; mem = $4
+  gsub(/"/, "\\\"", name)
+  printf "%s{\"pid\": %s, \"name\": \"%s\", \"cpu\": %s, \"mem\": %s}", (NR > 1 ? ", " : ""), pid, name, cpu, mem
+}
+END { printf "]}\n" }
+'
+```
 
-## Geplante Erweiterungen
+Sorting by CPU or RAM in the popup is handled by the card itself — the script
+deliberately returns every process, unfiltered.
 
-- Konfigurierbare Farben pro Metrik
+**2. Sensor in `configuration.yaml`**:
+
+```yaml
+command_line:
+  - sensor:
+      name: Top Processes
+      unique_id: top_processes
+      command: "bash /config/scripts/top_processes.sh"
+      scan_interval: 10
+      json_attributes:
+        - processes
+      value_template: "{{ value_json.processes | length }}"
+```
+
+The sensor's state becomes the process count; the full list lives in the
+`processes` attribute, which the card reads directly — no `template:` sensors
+needed here, unlike the per-core setup.
+
+**3. Add it to the card**, either via YAML or the visual editor (pick a
+"Processes" entity under Entities):
+
+```yaml
+entities:
+  processes: sensor.top_processes
+```
+
+This adds a "Processes" button next to the temperature badge in the header.
+Clicking it opens a popup with every process in a scrollable table; the two
+buttons at the top switch the sort order between CPU and RAM usage. The table
+only refreshes while the popup is open, so it doesn't cost anything in the
+background. Without `entities.processes` configured, the button simply stays
+hidden.
+
+## Visual editor
+
+The card can be fully configured through the Lovelace UI (no YAML needed):
+Edit dashboard → Add card → select "Resource Monitor Card". The editor offers
+entity pickers for every sensor, a dynamic list to add/remove per-core CPU
+sensors, fields for title and time window, and the CPU/RAM and temperature
+thresholds. When first added, the card also tries to suggest matching System
+Monitor entities automatically (`getStubConfig`).
+
+YAML mode remains fully available and equivalent (see above).
+
+## Known limitations
+
+- History is fetched once via the REST API (`history/period`) when the card
+  loads; if that fails (e.g. permissions, HA version), the card keeps working
+  but starts with empty charts.
+- The editor uses `ha-entity-picker` from the HA frontend; if that component
+  isn't available for some reason, the editor falls back to plain text fields
+  for entity IDs.
+
+## Planned extensions
+
+- Configurable colors per metric
