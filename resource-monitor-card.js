@@ -302,6 +302,10 @@ class ResourceMonitorCard extends HTMLElement {
       : [];
     this._processesEntity = config.entities.processes || "";
     this._processesAttribute = config.processes_attribute || "processes";
+    this._processesFields = Object.assign(
+      { pid: "pid", name: "name", cpu: "cpu", mem: "mem" },
+      config.processes_fields || {}
+    );
 
     this._showCpu = config.show_cpu !== false;
     this._showMemory = config.show_memory !== false;
@@ -727,7 +731,7 @@ class ResourceMonitorCard extends HTMLElement {
       });
     }
     if (sortCpuBtn) sortCpuBtn.addEventListener("click", () => this._setProcessSort("cpu"));
-    if (sortRamBtn) sortRamBtn.addEventListener("click", () => this._setProcessSort("ram"));
+    if (sortRamBtn) sortRamBtn.addEventListener("click", () => this._setProcessSort("mem"));
     this._updateProcessSortButtons();
   }
 
@@ -756,7 +760,7 @@ class ResourceMonitorCard extends HTMLElement {
     const sortCpuBtn = this.shadowRoot.getElementById("proc-sort-cpu");
     const sortRamBtn = this.shadowRoot.getElementById("proc-sort-ram");
     if (sortCpuBtn) sortCpuBtn.classList.toggle("active", this._procSort === "cpu");
-    if (sortRamBtn) sortRamBtn.classList.toggle("active", this._procSort === "ram");
+    if (sortRamBtn) sortRamBtn.classList.toggle("active", this._procSort === "mem");
   }
 
   _renderProcessTable() {
@@ -764,8 +768,10 @@ class ResourceMonitorCard extends HTMLElement {
     if (!tbody || !this._hass) return;
     const state = this._hass.states[this._processesEntity];
     const list = (state && state.attributes && state.attributes[this._processesAttribute]) || [];
+    const f = this._processesFields;
+    const sortKey = f[this._procSort];
     const sorted = Array.isArray(list)
-      ? [...list].sort((a, b) => (Number(b[this._procSort]) || 0) - (Number(a[this._procSort]) || 0))
+      ? [...list].sort((a, b) => (Number(b[sortKey]) || 0) - (Number(a[sortKey]) || 0))
       : [];
 
     if (!sorted.length) {
@@ -775,12 +781,14 @@ class ResourceMonitorCard extends HTMLElement {
 
     tbody.innerHTML = sorted
       .map((p) => {
-        const cpu = p.cpu !== undefined && p.cpu !== null ? `${Number(p.cpu).toFixed(1)}%` : "–";
-        const mem = p.mem !== undefined && p.mem !== null ? `${Number(p.mem).toFixed(1)}%` : "–";
+        const cpuVal = p[f.cpu];
+        const memVal = p[f.mem];
+        const cpu = cpuVal !== undefined && cpuVal !== null ? `${Number(cpuVal).toFixed(1)}%` : "–";
+        const mem = memVal !== undefined && memVal !== null ? `${Number(memVal).toFixed(1)}%` : "–";
         return `
           <tr>
-            <td>${this._escape(p.name ?? "–")}</td>
-            <td>${p.pid ?? "–"}</td>
+            <td>${this._escape(p[f.name] ?? "–")}</td>
+            <td>${p[f.pid] ?? "–"}</td>
             <td>${cpu}</td>
             <td>${mem}</td>
           </tr>
