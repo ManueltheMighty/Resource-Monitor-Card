@@ -23,6 +23,29 @@
  * processes_attribute: processes   # optional, Name des Attributs mit der Prozessliste (Default: "processes")
  * show_processes: true             # optional, Prozess-Button ein-/ausblenden
  *
+ * Mehrere Server (optional, ersetzt das obige "entities:"):
+ * Statt eines einzelnen "entities:"-Blocks kann eine Liste "servers:"
+ * angegeben werden. Jeder Eintrag hat einen eigenen Namen und einen
+ * eigenen "entities:"-Block (gleiches Schema wie oben, inkl. cpu_cores/
+ * processes). Ab zwei Einträgen erscheint oben in der Karte eine
+ * Button-Leiste zum Umschalten; es wird immer nur ein Server gleichzeitig
+ * angezeigt, aber ALLE konfigurierten Server sammeln im Hintergrund
+ * durchgehend Live- und History-Daten, damit beim Umschalten sofort ein
+ * gefüllter Verlauf da ist. thresholds/temperature_thresholds/show_*
+ * gelten weiterhin global für alle Server.
+ *
+ * servers:
+ *   - name: Homeserver
+ *     entities:
+ *       cpu: sensor.homeserver_processor_use
+ *       memory: sensor.homeserver_memory_use_percent
+ *       swap: sensor.homeserver_swap_use_percent
+ *   - name: NAS
+ *     entities:
+ *       cpu: sensor.nas_processor_use
+ *       memory: sensor.nas_memory_use_percent
+ *       swap: sensor.nas_swap_use_percent
+ *
  * Lokalisierung: Die Karte zeigt Texte auf Deutsch, wenn hass.language "de"
  * ist, sonst auf Englisch (siehe STRINGS weiter unten).
  *
@@ -123,6 +146,13 @@ const STRINGS = {
     vis_network: "Netzwerk-Graph anzeigen",
     vis_temperature: "Temperatur-Badge anzeigen",
     vis_processes: "Prozess-Button anzeigen",
+    server_label: "Server",
+    editor_servers: "Server",
+    editor_servers_hint:
+      "Mehrere Server/Geräte überwachen: jeder Eintrag hat eigene Entities. Oben in der Karte erscheint dann je Server ein Umschalt-Button.",
+    editor_add_server: "+ Server hinzufügen",
+    editor_remove_server: "Server entfernen",
+    editor_server_name: "Servername",
   },
   en: {
     now: "now",
@@ -174,6 +204,13 @@ const STRINGS = {
     vis_network: "Show network chart",
     vis_temperature: "Show temperature badge",
     vis_processes: "Show processes button",
+    server_label: "Server",
+    editor_servers: "Servers",
+    editor_servers_hint:
+      "Monitor multiple servers/devices: each entry has its own entities. A switch button per server then appears at the top of the card.",
+    editor_add_server: "+ Add server",
+    editor_remove_server: "Remove server",
+    editor_server_name: "Server name",
   },
 };
 
@@ -220,15 +257,9 @@ class ResourceMonitorCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this._buffers = {
-      cpu: [],
-      memory: [],
-      swap: [],
-      network_in: [],
-      network_out: [],
-    };
-    this._entityToKey = {};
-    this._historyRequested = false;
+    this._servers = [];
+    this._activeServerIndex = 0;
+    this._multiServer = false;
     this._lastRender = 0;
     this._resizeObserver = null;
     this._lang = "en";
@@ -273,16 +304,70 @@ class ResourceMonitorCard extends HTMLElement {
     };
   }
 
-  setConfig(config) {
-    if (!config || !config.entities) {
-      throw new Error("resource-monitor-card: 'entities' muss konfiguriert sein.");
-    }
+  /**
+   * Baut den internen Zustand für einen einzelnen Server (Puffer, Entity-Mapping,
+   * abgeleitete Flags) aus dessen entities-Objekt.
+   */
+  _buildServerState(entities, name) {
+    const ents = entities || {};
     const req = ["cpu", "memory", "swap"];
     for (const key of req) {
-      if (!config.entities[key]) {
-        throw new Error(`resource-monitor-card: entities.${key} fehlt.`);
+      if (!ents[key]) {
+        throw new Error(`resource-monitor-card: entities.${key} fehlt${name ? ` (Server "${name}")` : ""}.`);
       }
     }
+
+    const hasNetworkIn = !!ents.network_in;
+    const hasNetworkOut = !!ents.network_out;
+    const cpuCores = Array.isArray(ents.cpu_cores) ? ents.cpu_cores.filter(Boolean) : [];
+    const processesEntity = ents.processes || "";
+
+    const entityToKey = {};
+    Object.entries(ents).forEach(([key, id]) => {
+      if (id && key !== "temperature" && key !== "cpu_cores" && key !== "processes") {
+        entityToKey[id] = key;
+      }
+    });
+    cpuCores.forEach((id, i) => {
+      entityToKey[id] = `core_${i}`;
+    });
+
+    const buffers = { cpu: [], memory: [], swap: [], network_in: [], network_out: [] };
+    cpuCores.forEach((_, i) => {
+      buffers[`core_${i}`] = [];
+    });
+
+    return {
+      name: name || null,
+      entities: ents,
+      hasNetworkIn,
+      hasNetworkOut,
+      cpuCores,
+      processesEntity,
+      entityToKey,
+      buffers,
+      historyRequested: false,
+    };
+  }
+
+  setConfig(config) {
+    if (!config) {
+      throw new Error("resource-monitor-card: Konfiguration fehlt.");
+    }
+    const serverConfigs =
+      Array.isArray(config.servers) && config.servers.length > 0
+        ? config.servers
+        : [{ name: null, entities: config.entities }];
+
+    if (!serverConfigs[0].entities && serverConfigs.length === 1) {
+      throw new Error("resource-monitor-card: 'entities' oder 'servers' muss konfiguriert sein.");
+    }
+
+    this._servers = serverConfigs.map((s) => this._buildServerState(s.entities, s.name));
+    if (!this._activeServerIndex || this._activeServerIndex >= this._servers.length) {
+      this._activeServerIndex = 0;
+    }
+    this._multiServer = this._servers.length > 1;
 
     this._config = {
       title: config.title || "System Monitor",
@@ -293,14 +378,9 @@ class ResourceMonitorCard extends HTMLElement {
         ...(config.temperature_thresholds || {}),
       },
       entities: config.entities,
+      servers: config.servers,
     };
 
-    this._hasNetworkIn = !!config.entities.network_in;
-    this._hasNetworkOut = !!config.entities.network_out;
-    this._cpuCores = Array.isArray(config.entities.cpu_cores)
-      ? config.entities.cpu_cores.filter(Boolean)
-      : [];
-    this._processesEntity = config.entities.processes || "";
     this._processesAttribute = config.processes_attribute || "processes";
     this._processesFields = Object.assign(
       { pid: "pid", name: "name", cpu: "cpu", mem: "mem" },
@@ -309,35 +389,48 @@ class ResourceMonitorCard extends HTMLElement {
 
     this._showCpu = config.show_cpu !== false;
     this._showMemory = config.show_memory !== false;
-    this._showNetwork = config.show_network !== false && (this._hasNetworkIn || this._hasNetworkOut);
-    this._showCores = config.show_cores !== false && this._cpuCores.length > 0;
+    this._showNetworkFlag = config.show_network !== false;
+    this._showCoresFlag = config.show_cores !== false;
     this._showTemperature = config.show_temperature !== false;
-    this._showProcesses = config.show_processes !== false && !!this._processesEntity;
+    this._showProcessesFlag = config.show_processes !== false;
 
-    this._entityToKey = {};
-    Object.entries(config.entities).forEach(([key, id]) => {
-      if (id && key !== "temperature" && key !== "cpu_cores" && key !== "processes") {
-        this._entityToKey[id] = key;
-      }
-    });
-    this._cpuCores.forEach((id, i) => {
-      this._entityToKey[id] = `core_${i}`;
-    });
-
-    this._historyRequested = false;
-    this._buffers = { cpu: [], memory: [], swap: [], network_in: [], network_out: [] };
-    this._cpuCores.forEach((_, i) => {
-      this._buffers[`core_${i}`] = [];
-    });
     this._buildDom();
+  }
+
+  _active() {
+    return this._servers[this._activeServerIndex] || this._servers[0];
+  }
+
+  _visibleNetwork() {
+    const s = this._active();
+    return this._showNetworkFlag && (s.hasNetworkIn || s.hasNetworkOut);
+  }
+
+  _visibleCores() {
+    const s = this._active();
+    return this._showCoresFlag && s.cpuCores.length > 0;
+  }
+
+  _visibleProcesses() {
+    const s = this._active();
+    return this._showProcessesFlag && !!s.processesEntity;
+  }
+
+  _setActiveServer(index) {
+    if (index === this._activeServerIndex) return;
+    this._activeServerIndex = index;
+    this._buildDom();
+    this._updateTempBadge();
+    this._renderAll();
   }
 
   getCardSize() {
     let size = 2;
     if (this._showCpu) size += 2;
-    if (this._showCores) size += 3;
+    if (this._visibleCores()) size += 3;
     if (this._showMemory) size += 2;
-    if (this._showNetwork) size += 3;
+    if (this._visibleNetwork()) size += 3;
+    if (this._multiServer) size += 1;
     return size;
   }
 
@@ -365,36 +458,42 @@ class ResourceMonitorCard extends HTMLElement {
       this._buildDom();
     }
 
-    if (!this._historyRequested) {
-      this._historyRequested = true;
-      this._fetchHistory();
-    }
+    this._servers.forEach((server) => {
+      if (!server.historyRequested) {
+        server.historyRequested = true;
+        this._fetchHistory(server);
+      }
+    });
 
-    const ents = this._config.entities;
     const now = Date.now();
 
-    const pushValue = (bufferKey, entityId) => {
+    const pushValue = (server, bufferKey, entityId) => {
       if (!entityId) return;
       const state = hass.states[entityId];
       if (!state) return;
       const value = parseFloat(state.state);
       if (Number.isNaN(value)) return;
-      const buf = this._buffers[bufferKey];
+      const buf = server.buffers[bufferKey];
       buf.push({ t: now, v: value });
       if (buf.length > MAX_BUFFER_POINTS) buf.shift();
     };
 
-    pushValue("cpu", ents.cpu);
-    pushValue("memory", ents.memory);
-    pushValue("swap", ents.swap);
-    pushValue("network_in", ents.network_in);
-    pushValue("network_out", ents.network_out);
-    this._cpuCores.forEach((entityId, i) => pushValue(`core_${i}`, entityId));
+    // Daten für ALLE konfigurierten Server sammeln, nicht nur den sichtbaren –
+    // so steht beim Umschalten sofort ein gefüllter Verlauf bereit.
+    this._servers.forEach((server) => {
+      const ents = server.entities;
+      pushValue(server, "cpu", ents.cpu);
+      pushValue(server, "memory", ents.memory);
+      pushValue(server, "swap", ents.swap);
+      pushValue(server, "network_in", ents.network_in);
+      pushValue(server, "network_out", ents.network_out);
+      server.cpuCores.forEach((entityId, i) => pushValue(server, `core_${i}`, entityId));
+    });
     this._trimBuffers();
 
     this._updateTempBadge();
 
-    if (this._showProcesses && this._procDialogOpen) {
+    if (this._visibleProcesses() && this._procDialogOpen) {
       this._renderProcessTable();
     }
 
@@ -406,13 +505,15 @@ class ResourceMonitorCard extends HTMLElement {
 
   _trimBuffers() {
     const cutoff = Date.now() - this._config.minutes_to_show * 60000;
-    Object.values(this._buffers).forEach((buf) => {
-      while (buf.length && buf[0].t < cutoff) buf.shift();
+    this._servers.forEach((server) => {
+      Object.values(server.buffers).forEach((buf) => {
+        while (buf.length && buf[0].t < cutoff) buf.shift();
+      });
     });
   }
 
-  async _fetchHistory() {
-    const ids = Object.keys(this._entityToKey);
+  async _fetchHistory(server) {
+    const ids = Object.keys(server.entityToKey);
     if (!ids.length || !this._hass) return;
     const windowMs = this._config.minutes_to_show * 60000;
     const startIso = new Date(Date.now() - windowMs).toISOString();
@@ -426,9 +527,9 @@ class ResourceMonitorCard extends HTMLElement {
           if (!entityStates || !entityStates.length) return;
           const first = entityStates[0];
           const entityId = first.entity_id;
-          const key = entityId ? this._entityToKey[entityId] : null;
+          const key = entityId ? server.entityToKey[entityId] : null;
           if (!key) return;
-          const buf = this._buffers[key];
+          const buf = server.buffers[key];
           entityStates.forEach((s) => {
             const raw = s.state !== undefined ? s.state : s.s;
             const ts = s.last_changed || s.lc || s.last_updated || s.lu;
@@ -550,6 +651,27 @@ class ResourceMonitorCard extends HTMLElement {
         }
         .processes-btn:hover { background: var(--secondary-background-color, rgba(128,128,128,0.1)); }
         .header-right { display: flex; align-items: center; gap: 8px; }
+        .server-tabs {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          margin-bottom: 12px;
+        }
+        .server-tab {
+          border: 1px solid var(--divider-color, #ccc);
+          background: transparent;
+          color: var(--secondary-text-color, #666);
+          border-radius: 12px;
+          padding: 4px 12px;
+          font-size: 0.8em;
+          cursor: pointer;
+        }
+        .server-tab.active {
+          background: var(--primary-color, #03a9f4);
+          color: #fff;
+          border-color: transparent;
+          font-weight: 600;
+        }
         .proc-dialog-overlay {
           position: fixed;
           inset: 0;
@@ -633,10 +755,27 @@ class ResourceMonitorCard extends HTMLElement {
         <div class="header">
           <span class="title">${this._config.title}</span>
           <div class="header-right">
-            <button class="processes-btn" id="processes-btn" style="${this._showProcesses ? "" : "display:none;"}">${this._t("processes")}</button>
+            <button class="processes-btn" id="processes-btn" style="${this._visibleProcesses() ? "" : "display:none;"}">${this._t("processes")}</button>
             <span class="temp-badge" id="temp-badge"></span>
           </div>
         </div>
+        ${
+          this._multiServer
+            ? `<div class="server-tabs" id="server-tabs">
+                ${this._servers
+                  .map(
+                    (s, i) => `
+                      <button
+                        type="button"
+                        class="server-tab${i === this._activeServerIndex ? " active" : ""}"
+                        data-server-index="${i}"
+                      >${s.name || `${this._t("server_label")} ${i + 1}`}</button>
+                    `
+                  )
+                  .join("")}
+              </div>`
+            : ""
+        }
         <div class="stack">
           <div class="metric" id="metric-cpu" style="${this._showCpu ? "" : "display:none;"}">
             <div class="metric-header">
@@ -646,7 +785,7 @@ class ResourceMonitorCard extends HTMLElement {
             <canvas id="canvas-cpu"></canvas>
           </div>
 
-          <div class="metric" id="metric-cores" style="${this._showCores ? "" : "display:none;"}">
+          <div class="metric" id="metric-cores" style="${this._visibleCores() ? "" : "display:none;"}">
             <div class="metric-header">
               <span class="metric-label">${this._t("cpu_cores")}</span>
               <span class="metric-value" id="val-cores"></span>
@@ -667,15 +806,15 @@ class ResourceMonitorCard extends HTMLElement {
             </div>
           </div>
 
-          <div class="metric" id="metric-network" style="${this._showNetwork ? "" : "display:none;"}">
+          <div class="metric" id="metric-network" style="${this._visibleNetwork() ? "" : "display:none;"}">
             <div class="metric-header">
               <span class="metric-label">${this._t("network")}</span>
               <span class="metric-value" id="val-network"></span>
             </div>
             <canvas id="canvas-network"></canvas>
             <div class="legend">
-              <span class="in" style="${this._hasNetworkIn ? "" : "display:none;"}">${this._t("network_in")}</span>
-              <span class="out" style="${this._hasNetworkOut ? "" : "display:none;"}">${this._t("network_out")}</span>
+              <span class="in" style="${this._active().hasNetworkIn ? "" : "display:none;"}">${this._t("network_in")}</span>
+              <span class="out" style="${this._active().hasNetworkOut ? "" : "display:none;"}">${this._t("network_out")}</span>
             </div>
           </div>
         </div>
@@ -713,7 +852,18 @@ class ResourceMonitorCard extends HTMLElement {
 
     this._buildCoreLegend();
     this._wireProcessDialog();
+    this._wireServerTabs();
     this._domBuilt = true;
+  }
+
+  _wireServerTabs() {
+    if (!this._multiServer) return;
+    this.shadowRoot.querySelectorAll(".server-tab").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = parseInt(btn.dataset.serverIndex, 10);
+        if (!Number.isNaN(idx)) this._setActiveServer(idx);
+      });
+    });
   }
 
   _wireProcessDialog() {
@@ -766,7 +916,7 @@ class ResourceMonitorCard extends HTMLElement {
   _renderProcessTable() {
     const tbody = this.shadowRoot.getElementById("proc-tbody");
     if (!tbody || !this._hass) return;
-    const state = this._hass.states[this._processesEntity];
+    const state = this._hass.states[this._active().processesEntity];
     const list = (state && state.attributes && state.attributes[this._processesAttribute]) || [];
     const f = this._processesFields;
     const sortKey = f[this._procSort];
@@ -804,7 +954,7 @@ class ResourceMonitorCard extends HTMLElement {
   _buildCoreLegend() {
     const legend = this.shadowRoot.getElementById("cores-legend");
     if (!legend) return;
-    legend.innerHTML = this._cpuCores
+    legend.innerHTML = this._active().cpuCores
       .map(
         (_, i) => `
           <span class="core-legend-item">
@@ -835,7 +985,7 @@ class ResourceMonitorCard extends HTMLElement {
   _updateTempBadge() {
     const badge = this.shadowRoot.getElementById("temp-badge");
     if (!badge) return;
-    const entityId = this._config.entities.temperature;
+    const entityId = this._active().entities.temperature;
     if (!this._showTemperature || !entityId || !this._hass || !this._hass.states[entityId]) {
       badge.style.display = "none";
       return;
@@ -855,17 +1005,18 @@ class ResourceMonitorCard extends HTMLElement {
   _renderAll() {
     if (!this._config) return;
     if (this._showCpu) this._renderCpu();
-    if (this._showCores) this._renderCores();
+    if (this._visibleCores()) this._renderCores();
     if (this._showMemory) this._renderMemory();
-    if (this._showNetwork) this._renderNetwork();
+    if (this._visibleNetwork()) this._renderNetwork();
   }
 
   _renderCores() {
-    if (!this._cpuCores || !this._cpuCores.length) return;
+    const server = this._active();
+    if (!server.cpuCores || !server.cpuCores.length) return;
     const canvas = this.shadowRoot.getElementById("canvas-cores");
     if (!canvas) return;
 
-    const values = this._cpuCores.map((_, i) => this._latest(`core_${i}`));
+    const values = server.cpuCores.map((_, i) => this._latest(`core_${i}`));
     const known = values.filter((v) => v !== null);
     const valEl = this.shadowRoot.getElementById("val-cores");
     if (valEl) {
@@ -874,15 +1025,15 @@ class ResourceMonitorCard extends HTMLElement {
         : "–";
     }
 
-    this._cpuCores.forEach((_, i) => {
+    server.cpuCores.forEach((_, i) => {
       const el = this.shadowRoot.querySelector(`[data-core-index="${i}"]`);
       if (!el) return;
       const v = values[i];
       el.textContent = `${this._t("core")} ${i}: ${v !== null ? v.toFixed(0) + "%" : "–"}`;
     });
 
-    const series = this._cpuCores.map((_, i) => ({
-      buffer: this._buffers[`core_${i}`] || [],
+    const series = server.cpuCores.map((_, i) => ({
+      buffer: server.buffers[`core_${i}`] || [],
       color: CORE_COLORS[i % CORE_COLORS.length],
     }));
 
@@ -896,8 +1047,8 @@ class ResourceMonitorCard extends HTMLElement {
   }
 
   _latest(bufferKey) {
-    const buf = this._buffers[bufferKey];
-    return buf.length ? buf[buf.length - 1].v : null;
+    const buf = this._active().buffers[bufferKey];
+    return buf && buf.length ? buf[buf.length - 1].v : null;
   }
 
   _renderCpu() {
@@ -914,7 +1065,7 @@ class ResourceMonitorCard extends HTMLElement {
       yMax: 100,
       yTicks: [25, 50, 75],
       yFormat: (v) => `${v}%`,
-      series: [{ buffer: this._buffers.cpu, color }],
+      series: [{ buffer: this._active().buffers.cpu, color }],
     });
   }
 
@@ -936,41 +1087,39 @@ class ResourceMonitorCard extends HTMLElement {
       yTicks: [25, 50, 75],
       yFormat: (v) => `${v}%`,
       series: [
-        { buffer: this._buffers.memory, color: ramColor },
-        { buffer: this._buffers.swap, color: COLOR_SWAP },
+        { buffer: this._active().buffers.memory, color: ramColor },
+        { buffer: this._active().buffers.swap, color: COLOR_SWAP },
       ],
     });
   }
 
   _renderNetwork() {
-    if (!this._hasNetworkIn && !this._hasNetworkOut) return; // Block ist ausgeblendet
+    const server = this._active();
+    if (!server.hasNetworkIn && !server.hasNetworkOut) return; // Block ist ausgeblendet
     const canvas = this.shadowRoot.getElementById("canvas-network");
     if (!canvas) return;
 
-    const unit = this._unitFor(
-      this._config.entities.network_in || this._config.entities.network_out,
-      "KB/s"
-    );
+    const unit = this._unitFor(server.entities.network_in || server.entities.network_out, "KB/s");
     const valueEl = this.shadowRoot.getElementById("val-network");
     const parts = [];
     let inV = 0;
     let outV = 0;
-    if (this._hasNetworkIn) {
+    if (server.hasNetworkIn) {
       inV = this._latest("network_in") ?? 0;
       parts.push(`↓ ${inV.toFixed(0)} ${unit}`);
     }
-    if (this._hasNetworkOut) {
+    if (server.hasNetworkOut) {
       outV = this._latest("network_out") ?? 0;
       parts.push(`↑ ${outV.toFixed(0)} ${unit}`);
     }
     valueEl.textContent = parts.join("  ");
 
-    const allVals = [...this._buffers.network_in, ...this._buffers.network_out].map((p) => p.v);
+    const allVals = [...server.buffers.network_in, ...server.buffers.network_out].map((p) => p.v);
     const yMax = niceMax(Math.max(1, ...allVals, inV, outV));
 
     const series = [];
-    if (this._hasNetworkIn) series.push({ buffer: this._buffers.network_in, color: COLOR_NET_IN });
-    if (this._hasNetworkOut) series.push({ buffer: this._buffers.network_out, color: COLOR_NET_OUT });
+    if (server.hasNetworkIn) series.push({ buffer: server.buffers.network_in, color: COLOR_NET_IN });
+    if (server.hasNetworkOut) series.push({ buffer: server.buffers.network_out, color: COLOR_NET_OUT });
 
     this._drawChart(canvas, {
       yMin: 0,
@@ -1117,12 +1266,32 @@ class ResourceMonitorCardEditor extends HTMLElement {
         ...DEFAULT_TEMP_THRESHOLDS,
         ...(config.temperature_thresholds || {}),
       },
-      entities: { ...(config.entities || {}) },
     };
-    this._config.entities.cpu_cores = Array.isArray(config.entities && config.entities.cpu_cores)
-      ? [...config.entities.cpu_cores]
-      : [];
+
+    if (Array.isArray(config.servers) && config.servers.length > 0) {
+      this._config.servers = config.servers.map((s) => ({
+        name: s.name || null,
+        entities: {
+          ...(s.entities || {}),
+          cpu_cores: Array.isArray(s.entities && s.entities.cpu_cores) ? [...s.entities.cpu_cores] : [],
+        },
+      }));
+      delete this._config.entities;
+    } else {
+      this._config.entities = { ...(config.entities || {}) };
+      this._config.entities.cpu_cores = Array.isArray(config.entities && config.entities.cpu_cores)
+        ? [...config.entities.cpu_cores]
+        : [];
+    }
     this._render();
+  }
+
+  // Liefert die zu rendernde Serverliste – im einfachen Modus ein einziger
+  // impliziter Eintrag auf Basis von config.entities.
+  _serversList() {
+    return Array.isArray(this._config.servers) && this._config.servers.length > 0
+      ? this._config.servers
+      : [{ name: null, entities: this._config.entities || {} }];
   }
 
   set hass(hass) {
@@ -1135,11 +1304,7 @@ class ResourceMonitorCardEditor extends HTMLElement {
     }
     // Bereits vorhandene Entity-Picker mit hass versorgen, ohne alles neu zu bauen
     if (!this.shadowRoot) return;
-    ENTITY_FIELDS.forEach(({ key }) => {
-      const picker = this.shadowRoot.querySelector(`[data-entity-field="${key}"] ha-entity-picker`);
-      if (picker) picker.hass = hass;
-    });
-    this.shadowRoot.querySelectorAll("#core-rows ha-entity-picker").forEach((picker) => {
+    this.shadowRoot.querySelectorAll("ha-entity-picker").forEach((picker) => {
       picker.hass = hass;
     });
   }
@@ -1171,12 +1336,55 @@ class ResourceMonitorCardEditor extends HTMLElement {
     this._fireChanged();
   }
 
-  _updateEntity(key, value) {
-    const entities = { ...this._config.entities };
+  // Schreibt ein neues entities-Objekt für Server `idx` zurück – je nachdem,
+  // ob wir im Mehrserver-Modus (config.servers) oder im einfachen Modus
+  // (config.entities) sind.
+  _updateServerEntities(idx, newEntities) {
+    if (Array.isArray(this._config.servers)) {
+      const servers = this._config.servers.map((s, i) => (i === idx ? { ...s, entities: newEntities } : s));
+      this._config = { ...this._config, servers };
+    } else {
+      this._config = { ...this._config, entities: newEntities };
+    }
+    this._fireChanged();
+  }
+
+  _updateServerName(idx, name) {
+    if (!Array.isArray(this._config.servers)) return;
+    const servers = this._config.servers.map((s, i) => (i === idx ? { ...s, name: name || null } : s));
+    this._config = { ...this._config, servers };
+    this._fireChanged();
+  }
+
+  _addServer() {
+    let servers;
+    if (Array.isArray(this._config.servers)) {
+      servers = [...this._config.servers, { name: null, entities: { cpu_cores: [] } }];
+    } else {
+      servers = [
+        { name: null, entities: this._config.entities || { cpu_cores: [] } },
+        { name: null, entities: { cpu_cores: [] } },
+      ];
+    }
+    this._config = { ...this._config, servers };
+    delete this._config.entities;
+    this._render();
+    this._fireChanged();
+  }
+
+  _removeServer(idx) {
+    if (!Array.isArray(this._config.servers) || this._config.servers.length <= 1) return;
+    const servers = this._config.servers.filter((_, i) => i !== idx);
+    this._config = { ...this._config, servers };
+    this._render();
+    this._fireChanged();
+  }
+
+  _updateEntity(idx, key, value) {
+    const entities = { ...this._serversList()[idx].entities };
     if (value) entities[key] = value;
     else delete entities[key];
-    this._config = { ...this._config, entities };
-    this._fireChanged();
+    this._updateServerEntities(idx, entities);
   }
 
   _render() {
@@ -1244,6 +1452,36 @@ class ResourceMonitorCardEditor extends HTMLElement {
           font-size: 0.9em;
           color: var(--primary-text-color, #000);
         }
+        .server-block {
+          display: flex;
+          flex-direction: column;
+          gap: 14px;
+          border: 1px solid var(--divider-color, #ccc);
+          border-radius: 8px;
+          padding: 10px;
+        }
+        .server-block-header { display: flex; gap: 8px; align-items: flex-end; }
+        .server-block-header .row { flex: 1; }
+        .remove-server-btn {
+          flex: none;
+          border: 1px solid var(--divider-color, #ccc);
+          background: transparent;
+          color: var(--secondary-text-color, #666);
+          border-radius: 4px;
+          padding: 8px 10px;
+          cursor: pointer;
+          font-size: 0.85em;
+        }
+        .add-server-btn {
+          align-self: flex-start;
+          padding: 6px 12px;
+          border-radius: 4px;
+          border: 1px solid var(--divider-color, #ccc);
+          background: transparent;
+          color: var(--primary-color, #03a9f4);
+          cursor: pointer;
+          font-size: 0.85em;
+        }
       </style>
       <div class="form">
         <div class="row">
@@ -1266,16 +1504,50 @@ class ResourceMonitorCardEditor extends HTMLElement {
           `
         ).join("")}
 
-        <div class="section-title">${this._t("editor_entities")}</div>
-        ${ENTITY_FIELDS.map(
-          (f) => `<div class="row" data-entity-field="${f.key}"><label>${this._t(f.labelKey)}</label></div>`
-        ).join("")}
-        <div class="hint">${this._t("editor_entities_hint")}</div>
+        <div class="section-title">${this._t("editor_servers")}</div>
+        <div class="hint">${this._t("editor_servers_hint")}</div>
+        ${this._serversList()
+          .map((s, i) => {
+            const multi = Array.isArray(this._config.servers);
+            return `
+              <div class="server-block" data-server-block="${i}">
+                ${
+                  multi
+                    ? `
+                      <div class="server-block-header">
+                        <div class="row">
+                          <label>${this._t("editor_server_name")}</label>
+                          <input type="text" class="server-name-input" data-server="${i}" value="${s.name || ""}">
+                        </div>
+                        ${
+                          this._serversList().length > 1
+                            ? `<button type="button" class="remove-server-btn" data-server="${i}">${this._t(
+                                "editor_remove_server"
+                              )}</button>`
+                            : ""
+                        }
+                      </div>
+                    `
+                    : ""
+                }
+                <div class="section-title">${this._t("editor_entities")}</div>
+                ${ENTITY_FIELDS.map(
+                  (f) =>
+                    `<div class="row" data-server="${i}" data-entity-field="${f.key}"><label>${this._t(
+                      f.labelKey
+                    )}</label></div>`
+                ).join("")}
+                <div class="hint">${this._t("editor_entities_hint")}</div>
 
-        <div class="section-title">${this._t("editor_cores")}</div>
-        <div class="hint">${this._t("editor_cores_hint")}</div>
-        <div id="core-rows"></div>
-        <button type="button" class="add-core-btn" id="add-core-btn">${this._t("editor_add_core")}</button>
+                <div class="section-title">${this._t("editor_cores")}</div>
+                <div class="hint">${this._t("editor_cores_hint")}</div>
+                <div id="core-rows-${i}"></div>
+                <button type="button" class="add-core-btn" data-server="${i}">${this._t("editor_add_core")}</button>
+              </div>
+            `;
+          })
+          .join("")}
+        <button type="button" class="add-server-btn" id="add-server-btn">${this._t("editor_add_server")}</button>
 
         <div class="section-title">${this._t("editor_thresholds_cpu_ram")}</div>
         <div class="row-inline">
@@ -1291,26 +1563,40 @@ class ResourceMonitorCardEditor extends HTMLElement {
       </div>
     `;
 
-    ENTITY_FIELDS.forEach((f) => this._buildEntityPicker(f));
     VISIBILITY_FIELDS.forEach((f) => {
       this.shadowRoot
         .getElementById(f.key)
         .addEventListener("change", (e) => this._update(f.key, e.target.checked));
     });
-    this._buildCoreRows();
-    this.shadowRoot
-      .getElementById("add-core-btn")
-      .addEventListener("click", () => {
-        this._config = {
-          ...this._config,
-          entities: {
-            ...this._config.entities,
-            cpu_cores: [...this._config.entities.cpu_cores, ""],
-          },
-        };
-        this._buildCoreRows();
-        this._fireChanged();
-      });
+
+    this._serversList().forEach((_, i) => {
+      ENTITY_FIELDS.forEach((f) => this._buildEntityPicker(i, f));
+      this._buildCoreRows(i);
+
+      const addCoreBtn = this.shadowRoot.querySelector(`.add-core-btn[data-server="${i}"]`);
+      if (addCoreBtn) {
+        addCoreBtn.addEventListener("click", () => {
+          const entities = this._serversList()[i].entities;
+          this._updateServerEntities(i, {
+            ...entities,
+            cpu_cores: [...(entities.cpu_cores || []), ""],
+          });
+          this._buildCoreRows(i);
+        });
+      }
+
+      const nameInput = this.shadowRoot.querySelector(`.server-name-input[data-server="${i}"]`);
+      if (nameInput) {
+        nameInput.addEventListener("change", (e) => this._updateServerName(i, e.target.value));
+      }
+
+      const removeServerBtn = this.shadowRoot.querySelector(`.remove-server-btn[data-server="${i}"]`);
+      if (removeServerBtn) {
+        removeServerBtn.addEventListener("click", () => this._removeServer(i));
+      }
+    });
+
+    this.shadowRoot.getElementById("add-server-btn").addEventListener("click", () => this._addServer());
 
     this.shadowRoot
       .getElementById("title")
@@ -1334,14 +1620,14 @@ class ResourceMonitorCardEditor extends HTMLElement {
     this._rendered = true;
   }
 
-  _buildCoreRows() {
-    const container = this.shadowRoot.getElementById("core-rows");
+  _buildCoreRows(idx) {
+    const container = this.shadowRoot.getElementById(`core-rows-${idx}`);
     if (!container) return;
     container.innerHTML = "";
-    const cores = this._config.entities.cpu_cores || [];
+    const cores = this._serversList()[idx].entities.cpu_cores || [];
     const PickerCtor = customElements.get("ha-entity-picker");
 
-    cores.forEach((entityId, index) => {
+    cores.forEach((entityId, coreIndex) => {
       const row = document.createElement("div");
       row.className = "core-row";
 
@@ -1352,24 +1638,24 @@ class ResourceMonitorCardEditor extends HTMLElement {
         input.value = entityId || "";
         input.allowCustomEntity = true;
         input.includeDomains = ["sensor"];
-        input.label = `${this._t("core")} ${index}`;
+        input.label = `${this._t("core")} ${coreIndex}`;
         input.addEventListener("value-changed", (e) => {
           e.stopPropagation();
-          this._updateCore(index, e.detail.value);
+          this._updateCore(idx, coreIndex, e.detail.value);
         });
       } else {
         input = document.createElement("input");
         input.type = "text";
-        input.placeholder = `sensor.cpu_core_${index}`;
+        input.placeholder = `sensor.cpu_core_${coreIndex}`;
         input.value = entityId || "";
-        input.addEventListener("change", (e) => this._updateCore(index, e.target.value.trim()));
+        input.addEventListener("change", (e) => this._updateCore(idx, coreIndex, e.target.value.trim()));
       }
 
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
       removeBtn.title = this._t("editor_remove_core");
       removeBtn.textContent = "✕";
-      removeBtn.addEventListener("click", () => this._removeCore(index));
+      removeBtn.addEventListener("click", () => this._removeCore(idx, coreIndex));
 
       row.appendChild(input);
       row.appendChild(removeBtn);
@@ -1377,25 +1663,27 @@ class ResourceMonitorCardEditor extends HTMLElement {
     });
   }
 
-  _updateCore(index, value) {
-    const cores = [...this._config.entities.cpu_cores];
-    cores[index] = value;
-    this._config = { ...this._config, entities: { ...this._config.entities, cpu_cores: cores } };
-    this._fireChanged();
+  _updateCore(idx, coreIndex, value) {
+    const entities = this._serversList()[idx].entities;
+    const cores = [...(entities.cpu_cores || [])];
+    cores[coreIndex] = value;
+    this._updateServerEntities(idx, { ...entities, cpu_cores: cores });
   }
 
-  _removeCore(index) {
-    const cores = [...this._config.entities.cpu_cores];
-    cores.splice(index, 1);
-    this._config = { ...this._config, entities: { ...this._config.entities, cpu_cores: cores } };
-    this._buildCoreRows();
-    this._fireChanged();
+  _removeCore(idx, coreIndex) {
+    const entities = this._serversList()[idx].entities;
+    const cores = [...(entities.cpu_cores || [])];
+    cores.splice(coreIndex, 1);
+    this._updateServerEntities(idx, { ...entities, cpu_cores: cores });
+    this._buildCoreRows(idx);
   }
 
-  _buildEntityPicker(field) {
-    const container = this.shadowRoot.querySelector(`[data-entity-field="${field.key}"]`);
+  _buildEntityPicker(idx, field) {
+    const container = this.shadowRoot.querySelector(
+      `[data-server="${idx}"][data-entity-field="${field.key}"]`
+    );
     if (!container) return;
-    const currentValue = this._config.entities[field.key] || "";
+    const currentValue = this._serversList()[idx].entities[field.key] || "";
     const PickerCtor = customElements.get("ha-entity-picker");
 
     let input;
@@ -1407,7 +1695,7 @@ class ResourceMonitorCardEditor extends HTMLElement {
       input.includeDomains = ["sensor"];
       input.addEventListener("value-changed", (e) => {
         e.stopPropagation();
-        this._updateEntity(field.key, e.detail.value);
+        this._updateEntity(idx, field.key, e.detail.value);
       });
     } else {
       // Fallback ohne HA-Frontend-Komponenten: einfaches Textfeld für die Entity-ID
@@ -1415,7 +1703,7 @@ class ResourceMonitorCardEditor extends HTMLElement {
       input.type = "text";
       input.placeholder = "sensor.xxx";
       input.value = currentValue;
-      input.addEventListener("change", (e) => this._updateEntity(field.key, e.target.value.trim()));
+      input.addEventListener("change", (e) => this._updateEntity(idx, field.key, e.target.value.trim()));
     }
     container.appendChild(input);
   }
