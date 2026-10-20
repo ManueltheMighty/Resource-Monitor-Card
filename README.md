@@ -1,6 +1,6 @@
 # Resource Monitor Card
 
-*[Deutsche Version](README.de.md)*
+*[Deutsche Version](https://github.com/ManueltheMighty/Resource-Monitor-Card/blob/main/README.de.md)*
 
 A Home Assistant Lovelace custom card in the style of a Linux resource monitor.
 Shows CPU, RAM/Swap usage and network in/out as live line charts with axes and
@@ -12,11 +12,13 @@ users with `de` see German, everyone else sees English.
 ## Installation
 
 ### Manual
+
 1. Copy `resource-monitor-card.js` to `config/www/resource-monitor-card/`.
 2. In Settings → Dashboards → Resources, add
    `/local/resource-monitor-card/resource-monitor-card.js` as a JavaScript module.
 
 ### Via HACS
+
 1. HACS → Frontend → "..." → Custom repositories.
 2. Add this repository URL, category "Lovelace".
 3. Install "Resource Monitor Card", reload Home Assistant.
@@ -59,6 +61,7 @@ processes_attribute: processes                # optional, default: "processes"
 | `entities.cpu_cores` | no | List of entities for per-core CPU usage (own history chart) |
 | `entities.processes` | no | Entity whose attribute holds the process list (see below); enables the "Processes" button |
 | `processes_attribute` | no | Name of the attribute holding the process list (default: `processes`) |
+| `servers` | no | List of multiple servers instead of a single `entities:` block (see "Multiple servers" below) |
 | `show_cpu` | no | Show the CPU chart (default: `true`) |
 | `show_cores` | no | Show the CPU cores chart, if `entities.cpu_cores` is set (default: `true`) |
 | `show_memory` | no | Show the RAM/Swap chart (default: `true`) |
@@ -66,8 +69,7 @@ processes_attribute: processes                # optional, default: "processes"
 | `show_temperature` | no | Show the temperature badge, if `entities.temperature` is set (default: `true`) |
 | `show_processes` | no | Show the processes button, if `entities.processes` is set (default: `true`) |
 
-Every chart (and the processes button) can be toggled independently — either via
-`show_*` flags in YAML or in the visual editor under "Visibility". This lets
+Every chart (and the processes button) can be toggled independently — either via `show_*` flags in YAML or in the visual editor under "Visibility". This lets
 everyone put together their own selection without removing entities.
 
 Network is fully optional: if both entities are missing, the network chart is
@@ -88,6 +90,9 @@ numeric-state `sensor.*`, works well.
 - CPU and RAM line color changes with usage (green/orange/red)
 - A "Processes" button opens a popup listing every process, sortable by CPU or
   RAM usage, in a scrollable table (see below)
+- Optional support for multiple servers/devices with a switch button per
+  server in the header — only one is shown at a time, but all of them keep
+  collecting live and history data in the background (see below)
 - On load, the Recorder history for the last `minutes_to_show` minutes is
   fetched so the chart doesn't start empty; after that it keeps updating live
   from entity state changes
@@ -95,14 +100,50 @@ numeric-state `sensor.*`, works well.
 - Colors automatically adapt to the light/dark theme
 - UI language follows the Home Assistant profile (German for `de`, English otherwise)
 
+## Multiple servers (optional)
+
+Instead of a single `entities:` block, you can configure a `servers:` list.
+Each entry has its own name and its own `entities:` block (same schema as
+above, including `cpu_cores` and `processes`). From two entries onward, a row
+of switch buttons appears at the top of the card — only one server is shown
+at a time, but **all** configured servers keep collecting live and history
+data in the background, so switching shows an already-filled chart instantly
+instead of starting empty.
+
+`thresholds`, `temperature_thresholds` and the `show_*` visibility flags stay
+global and apply to whichever server is currently selected; only the entities
+differ per server.
+
+```yaml
+type: custom:resource-monitor-card
+servers:
+  - name: Homeserver
+    entities:
+      cpu: sensor.homeserver_processor_use
+      memory: sensor.homeserver_memory_use_percent
+      swap: sensor.homeserver_swap_use_percent
+      network_in: sensor.homeserver_network_in_eth0
+      network_out: sensor.homeserver_network_out_eth0
+  - name: NAS
+    entities:
+      cpu: sensor.nas_processor_use
+      memory: sensor.nas_memory_use_percent
+      swap: sensor.nas_swap_use_percent
+```
+
+Without `servers:`, the card behaves exactly as before (a single implicit
+server, no switch buttons) — fully backward compatible. You can also build
+this configuration entirely through the visual editor: it migrates an
+existing single-server setup into the first entry automatically once you
+click "+ Add server".
+
 ## Per-core CPU usage (optional, via your own sensor setup)
 
 System Monitor only provides total CPU usage, not per-core values. A small
 script that reads `/proc/stat` lets you add this anyway — the card then shows
 per-core usage as its own history chart under the CPU chart.
 
-**Requirement:** Home Assistant needs access to the real host `/proc`
-(true for Home Assistant OS, Supervised, and most container installs). On
+**Requirement:** Home Assistant needs access to the real host `/proc` (true for Home Assistant OS, Supervised, and most container installs). On
 Docker installs without the host PID namespace, the script may only show
 values for the container itself.
 
@@ -155,13 +196,10 @@ END {
 ' <<< "$s2"
 ```
 
-The script waits 1 second internally to compute per-core usage from two
-`/proc/stat` snapshots — each call therefore takes about 1s, which is fine
+The script waits 1 second internally to compute per-core usage from two `/proc/stat` snapshots — each call therefore takes about 1s, which is fine
 with `scan_interval: 10` or higher.
 
-**2. Sensor in `configuration.yaml`** (current syntax: a dedicated
-`command_line:` top-level key, **not** `platform: command_line` under
-`sensor:` — that's no longer supported by recent Home Assistant versions).
+**2. Sensor in `configuration.yaml`** (current syntax: a dedicated `command_line:` top-level key, **not** `platform: command_line` under `sensor:` — that's no longer supported by recent Home Assistant versions).
 Adjust the number of `cpuN` entries to your core count, e.g. via `nproc`:
 
 ```yaml
@@ -199,8 +237,7 @@ template:
 ```
 
 If your `configuration.yaml` already has a `template:` block, append the new
-entries under its existing `- sensor:` list instead of adding a second
-`template:` key (YAML only allows one top-level key of the same name per
+entries under its existing `- sensor:` list instead of adding a second `template:` key (YAML only allows one top-level key of the same name per
 file). You most likely don't have a `command_line:` key yet, so you can just
 add it.
 
@@ -264,8 +301,7 @@ command_line:
       value_template: "{{ value_json.processes | length }}"
 ```
 
-The sensor's state becomes the process count; the full list lives in the
-`processes` attribute, which the card reads directly — no `template:` sensors
+The sensor's state becomes the process count; the full list lives in the `processes` attribute, which the card reads directly — no `template:` sensors
 needed here, unlike the per-core setup.
 
 **3. Add it to the card**, either via YAML or the visual editor (pick a
@@ -288,9 +324,11 @@ hidden.
 The card can be fully configured through the Lovelace UI (no YAML needed):
 Edit dashboard → Add card → select "Resource Monitor Card". The editor offers
 entity pickers for every sensor, a dynamic list to add/remove per-core CPU
-sensors, fields for title and time window, and the CPU/RAM and temperature
-thresholds. When first added, the card also tries to suggest matching System
-Monitor entities automatically (`getStubConfig`).
+sensors, fields for title and time window, the CPU/RAM and temperature
+thresholds, and a "+ Add server" button to turn a single-server setup into a
+multi-server one (with a name field and a "Remove server" button per entry).
+When first added, the card also tries to suggest matching System Monitor
+entities automatically (`getStubConfig`).
 
 YAML mode remains fully available and equivalent (see above).
 

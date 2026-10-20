@@ -1,6 +1,6 @@
 # Resource Monitor Card
 
-*[English version](README.md)*
+*[English version](https://github.com/ManueltheMighty/Resource-Monitor-Card/blob/main/README.md)*
 
 Eine Home Assistant Lovelace Custom Card im Stil eines Linux-Ressourcenmonitors.
 Zeigt CPU-, RAM/Swap-Auslastung sowie Netzwerk-Ein-/Ausgang als Live-Liniendiagramme
@@ -13,11 +13,13 @@ Nutzer mit `de` sehen deutsche Texte, alle anderen englische.
 ## Installation
 
 ### Manuell
+
 1. `resource-monitor-card.js` nach `config/www/resource-monitor-card/` kopieren.
 2. In Einstellungen → Dashboards → Ressourcen die Datei
    `/local/resource-monitor-card/resource-monitor-card.js` als JavaScript-Modul hinzufügen.
 
 ### Über HACS
+
 1. HACS → Frontend → „..." → Benutzerdefinierte Repositories.
 2. Repository-URL eintragen, Kategorie „Lovelace".
 3. „Resource Monitor Card" installieren, Home Assistant neu laden.
@@ -60,6 +62,7 @@ processes_attribute: processes                # optional, Standard: "processes"
 | `entities.cpu_cores` | nein | Liste von Entities für die Auslastung pro CPU-Core (eigener Verlaufsgraph) |
 | `entities.processes` | nein | Entity, deren Attribut die Prozessliste enthält (siehe unten); schaltet den „Prozesse"-Button frei |
 | `processes_attribute` | nein | Name des Attributs mit der Prozessliste (Standard: `processes`) |
+| `servers` | nein | Liste mehrerer Server statt eines einzelnen `entities:`-Blocks (siehe „Mehrere Server" unten) |
 | `show_cpu` | nein | CPU-Graph anzeigen (Standard: `true`) |
 | `show_cores` | nein | CPU-Cores-Graph anzeigen, sofern `entities.cpu_cores` gesetzt ist (Standard: `true`) |
 | `show_memory` | nein | RAM/Swap-Graph anzeigen (Standard: `true`) |
@@ -90,12 +93,52 @@ oder ein anderer `sensor.*` mit numerischem Zustand.
 - Linienfarbe von CPU und RAM wechselt je nach Auslastung (grün/orange/rot)
 - „Prozesse"-Button öffnet ein Popup mit allen Prozessen, sortierbar nach CPU-
   oder RAM-Auslastung, in einer scrollbaren Tabelle (siehe unten)
+- Optionale Unterstützung mehrerer Server/Geräte mit einem Umschalt-Button
+  pro Server im Header – es wird immer nur einer gleichzeitig angezeigt, aber
+  alle sammeln im Hintergrund weiter Live- und History-Daten (siehe unten)
 - Beim Laden wird die Recorder-History der letzten `minutes_to_show` Minuten geladen,
   damit der Graph nicht leer startet; danach läuft die Aktualisierung live über die
   Zustandsänderungen der Entities weiter
 - Automatische Skalierung der Netzwerk-Y-Achse auf einen „runden" Höchstwert
 - Farben passen sich automatisch an Light/Dark-Theme an
 - Die Sprache der Karte richtet sich nach dem Home-Assistant-Profil (Deutsch bei `de`, sonst Englisch)
+
+## Mehrere Server (optional)
+
+Statt eines einzelnen `entities:`-Blocks kann eine Liste `servers:` angegeben
+werden. Jeder Eintrag hat einen eigenen Namen und einen eigenen `entities:`-
+Block (gleiches Schema wie oben, inkl. `cpu_cores` und `processes`). Ab zwei
+Einträgen erscheint oben in der Karte eine Button-Leiste zum Umschalten – es
+wird immer nur ein Server gleichzeitig angezeigt, aber **alle** konfigurierten
+Server sammeln im Hintergrund durchgehend Live- und History-Daten, damit beim
+Umschalten sofort ein gefüllter Verlauf da ist, statt leer zu starten.
+
+`thresholds`, `temperature_thresholds` und die `show_*`-Sichtbarkeits-Flags
+bleiben weiterhin global und gelten für den jeweils ausgewählten Server; nur
+die Entities unterscheiden sich pro Server.
+
+```yaml
+type: custom:resource-monitor-card
+servers:
+  - name: Homeserver
+    entities:
+      cpu: sensor.homeserver_processor_use
+      memory: sensor.homeserver_memory_use_percent
+      swap: sensor.homeserver_swap_use_percent
+      network_in: sensor.homeserver_network_in_eth0
+      network_out: sensor.homeserver_network_out_eth0
+  - name: NAS
+    entities:
+      cpu: sensor.nas_processor_use
+      memory: sensor.nas_memory_use_percent
+      swap: sensor.nas_swap_use_percent
+```
+
+Ohne `servers:` verhält sich die Karte exakt wie vorher (ein impliziter
+Server, keine Umschalt-Buttons) – vollständig abwärtskompatibel. Diese
+Konfiguration lässt sich auch komplett über den visuellen Editor aufbauen: er
+wandelt eine bestehende Einzelserver-Konfiguration beim Klick auf „+ Server
+hinzufügen" automatisch in den ersten Eintrag um.
 
 ## CPU-Auslastung pro Kern (optional, via eigenem Sensor-Setup)
 
@@ -108,8 +151,7 @@ Karte zeigt die Werte dann als eigenen Verlaufsgraphen unter dem CPU-Graphen an.
 Bei Docker-Installationen ohne Host-PID-Namespace zeigt das Skript ggf. nur
 Container-eigene Werte.
 
-**1. Skript anlegen** unter `/config/scripts/cpu_per_core.sh` (im Repo unter
-`ha_config_snippets/cpu_per_core.sh` enthalten):
+**1. Skript anlegen** unter `/config/scripts/cpu_per_core.sh` (im Repo unter `ha_config_snippets/cpu_per_core.sh` enthalten):
 
 ```bash
 #!/bin/bash
@@ -158,8 +200,7 @@ END {
 ```
 
 Das Skript wartet intern 1 Sekunde, um aus zwei `/proc/stat`-Schnappschüssen die
-Auslastung pro Kern zu berechnen – dadurch dauert jeder Abruf ~1s, was bei
-`scan_interval: 10` oder mehr unproblematisch ist.
+Auslastung pro Kern zu berechnen – dadurch dauert jeder Abruf ~1s, was bei `scan_interval: 10` oder mehr unproblematisch ist.
 
 **2. Sensor in `configuration.yaml`** (aktuelle Syntax: eigener `command_line:`-
 Schlüssel, **nicht** `platform: command_line` unter `sensor:` – das wird von neueren
@@ -201,8 +242,7 @@ template:
 ```
 
 Falls in deiner `configuration.yaml` bereits ein `template:`-Block existiert, hänge
-die neuen Einträge unter dessen `- sensor:`-Liste an, statt einen zweiten
-`template:`-Schlüssel anzulegen (YAML erlaubt pro Datei nur einen Schlüssel
+die neuen Einträge unter dessen `- sensor:`-Liste an, statt einen zweiten `template:`-Schlüssel anzulegen (YAML erlaubt pro Datei nur einen Schlüssel
 gleichen Namens auf oberster Ebene). Einen `command_line:`-Schlüssel hattest du
 vermutlich noch nicht, den kannst du einfach neu hinzufügen.
 
@@ -228,8 +268,7 @@ Ohne konfigurierte `cpu_cores` bleibt der Bereich einfach ausgeblendet.
 System Monitor liefert ebenfalls keine Pro-Prozess-Daten, daher braucht es hier
 ein ähnliches kleines Hilfsskript wie beim Kern-Graphen oben.
 
-**1. Skript anlegen** unter `/config/scripts/top_processes.sh` (im Repo unter
-`ha_config_snippets/top_processes.sh` enthalten). Es listet alle laufenden
+**1. Skript anlegen** unter `/config/scripts/top_processes.sh` (im Repo unter `ha_config_snippets/top_processes.sh` enthalten). Es listet alle laufenden
 Prozesse mit PID, Name, CPU % und RAM % als JSON:
 
 ```bash
@@ -282,18 +321,19 @@ Damit erscheint ein „Prozesse"-Button neben dem Temperatur-Badge im Header.
 Ein Klick öffnet ein Popup mit allen Prozessen in einer scrollbaren Tabelle;
 die beiden Buttons oben schalten die Sortierung zwischen CPU- und
 RAM-Auslastung um. Die Tabelle aktualisiert sich nur, solange das Popup
-geöffnet ist, kostet im Hintergrund also nichts. Ohne konfigurierte
-`entities.processes` bleibt der Button einfach ausgeblendet.
+geöffnet ist, kostet im Hintergrund also nichts. Ohne konfigurierte `entities.processes` bleibt der Button einfach ausgeblendet.
 
 ## Visueller Editor
 
 Die Karte lässt sich komplett über die Lovelace-UI konfigurieren (kein YAML nötig):
 Dashboard bearbeiten → Karte hinzufügen → „Resource Monitor Card" auswählen. Der
 Editor bietet Entity-Picker für alle Sensoren, eine dynamische Liste zum Hinzufügen/
-Entfernen von CPU-Kern-Sensoren, Felder für Titel und Zeitfenster sowie die
-Schwellenwerte für CPU/RAM und Temperatur. Beim erstmaligen Hinzufügen
-versucht die Karte zusätzlich, passende System-Monitor-Entities automatisch
-vorzuschlagen (`getStubConfig`).
+Entfernen von CPU-Kern-Sensoren, Felder für Titel und Zeitfenster, die
+Schwellenwerte für CPU/RAM und Temperatur, sowie einen „+ Server hinzufügen"-
+Button, der eine Einzelserver-Konfiguration in eine Mehrserver-Konfiguration
+umwandelt (mit Namensfeld und „Server entfernen"-Button pro Eintrag). Beim
+erstmaligen Hinzufügen versucht die Karte zusätzlich, passende
+System-Monitor-Entities automatisch vorzuschlagen (`getStubConfig`).
 
 Der YAML-Modus bleibt weiterhin verfügbar und identisch nutzbar (siehe oben).
 
