@@ -518,9 +518,9 @@ class ResourceMonitorCard extends HTMLElement {
     const windowMs = this._config.minutes_to_show * 60000;
     const startIso = new Date(Date.now() - windowMs).toISOString();
     try {
-      const url = `history/period/${encodeURIComponent(startIso)}?filter_entity_id=${ids.join(
-        ","
-      )}&minimal_response&no_attributes`;
+      const url = `history/period/${encodeURIComponent(startIso)}?filter_entity_id=${ids
+        .map(encodeURIComponent)
+        .join(",")}&minimal_response&no_attributes`;
       const result = await this._hass.callApi("GET", url);
       if (Array.isArray(result)) {
         result.forEach((entityStates) => {
@@ -753,7 +753,7 @@ class ResourceMonitorCard extends HTMLElement {
       ${style}
       <ha-card>
         <div class="header">
-          <span class="title">${this._config.title}</span>
+          <span class="title">${this._escape(this._config.title)}</span>
           <div class="header-right">
             <button class="processes-btn" id="processes-btn" style="${this._visibleProcesses() ? "" : "display:none;"}">${this._t("processes")}</button>
             <span class="temp-badge" id="temp-badge"></span>
@@ -769,7 +769,7 @@ class ResourceMonitorCard extends HTMLElement {
                         type="button"
                         class="server-tab${i === this._activeServerIndex ? " active" : ""}"
                         data-server-index="${i}"
-                      >${s.name || `${this._t("server_label")} ${i + 1}`}</button>
+                      >${s.name ? this._escape(s.name) : `${this._t("server_label")} ${i + 1}`}</button>
                     `
                   )
                   .join("")}
@@ -938,7 +938,7 @@ class ResourceMonitorCard extends HTMLElement {
         return `
           <tr>
             <td>${this._escape(p[f.name] ?? "–")}</td>
-            <td>${p[f.pid] ?? "–"}</td>
+            <td>${this._escape(p[f.pid] ?? "–")}</td>
             <td>${cpu}</td>
             <td>${mem}</td>
           </tr>
@@ -1323,6 +1323,15 @@ class ResourceMonitorCardEditor extends HTMLElement {
     );
   }
 
+  // Escaped für die Verwendung in HTML-Attributen (z. B. value="...") und
+  // Textinhalten innerhalb von innerHTML-Templates.
+  _escapeAttr(str) {
+    return String(str ?? "").replace(
+      /[&<>"']/g,
+      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+    );
+  }
+
   _update(key, value) {
     this._config = { ...this._config, [key]: value };
     this._fireChanged();
@@ -1486,11 +1495,11 @@ class ResourceMonitorCardEditor extends HTMLElement {
       <div class="form">
         <div class="row">
           <label>${this._t("editor_title")}</label>
-          <input type="text" id="title" value="${cfg.title}">
+          <input type="text" id="title" value="${this._escapeAttr(cfg.title)}">
         </div>
         <div class="row">
           <label>${this._t("editor_minutes")}</label>
-          <input type="number" id="minutes_to_show" min="1" value="${cfg.minutes_to_show}">
+          <input type="number" id="minutes_to_show" min="1" value="${this._escapeAttr(cfg.minutes_to_show)}">
         </div>
 
         <div class="section-title">${this._t("editor_visibility")}</div>
@@ -1517,7 +1526,7 @@ class ResourceMonitorCardEditor extends HTMLElement {
                       <div class="server-block-header">
                         <div class="row">
                           <label>${this._t("editor_server_name")}</label>
-                          <input type="text" class="server-name-input" data-server="${i}" value="${s.name || ""}">
+                          <input type="text" class="server-name-input" data-server="${i}" value="${this._escapeAttr(s.name)}">
                         </div>
                         ${
                           this._serversList().length > 1
@@ -1551,14 +1560,14 @@ class ResourceMonitorCardEditor extends HTMLElement {
 
         <div class="section-title">${this._t("editor_thresholds_cpu_ram")}</div>
         <div class="row-inline">
-          <div class="row"><label>${this._t("editor_warning")}</label><input type="number" id="th-warning" value="${th.warning}"></div>
-          <div class="row"><label>${this._t("editor_critical")}</label><input type="number" id="th-critical" value="${th.critical}"></div>
+          <div class="row"><label>${this._t("editor_warning")}</label><input type="number" id="th-warning" value="${this._escapeAttr(th.warning)}"></div>
+          <div class="row"><label>${this._t("editor_critical")}</label><input type="number" id="th-critical" value="${this._escapeAttr(th.critical)}"></div>
         </div>
 
         <div class="section-title">${this._t("editor_thresholds_temp")}</div>
         <div class="row-inline">
-          <div class="row"><label>${this._t("editor_warning")}</label><input type="number" id="tth-warning" value="${tth.warning}"></div>
-          <div class="row"><label>${this._t("editor_critical")}</label><input type="number" id="tth-critical" value="${tth.critical}"></div>
+          <div class="row"><label>${this._t("editor_warning")}</label><input type="number" id="tth-warning" value="${this._escapeAttr(tth.warning)}"></div>
+          <div class="row"><label>${this._t("editor_critical")}</label><input type="number" id="tth-critical" value="${this._escapeAttr(tth.critical)}"></div>
         </div>
       </div>
     `;
