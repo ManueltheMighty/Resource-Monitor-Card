@@ -63,6 +63,42 @@
  *       json_attributes:
  *         - processes
  *       value_template: "{{ value_json.processes | length }}"
+ *
+ * Prozess-Popup, Split-Modus (entities.processes_pid/_name/_cpu/_mem):
+ * Alternative zu entities.processes, für Quellen, die die komplette
+ * Prozessliste nicht als EIN Attribut liefern können/sollen (z.B. weil das
+ * Home-Assistant-Attributlimit von ca. 16 KB bei vielen Prozessen samt
+ * Zusatzdaten überschritten würde, etwa bei Glances). Statt einer Entity
+ * mit einer verschachtelten Liste werden hier 4 Entities erwartet, die
+ * JEWEILS EIN flaches Array liefern (z.B. 4 schlanke REST-Sensoren, einer
+ * pro Feld). Die Karte setzt die Objekte beim Rendern selbst zusammen
+ * (index-basiert, daher müssen alle 4 Sensoren vom selben Request-Zyklus
+ * stammen, z.B. gleicher scan_interval):
+ *
+ * entities:
+ *   processes_pid: sensor.ha_process_pids
+ *   processes_name: sensor.ha_process_names
+ *   processes_cpu: sensor.ha_process_cpu
+ *   processes_mem: sensor.ha_process_memory
+ * processes_split_attributes:        # optional, falls die Attributnamen abweichen
+ *   pid: pid
+ *   name: name
+ *   cpu: cpu_percent
+ *   mem: memory_percent
+ *
+ * Beispiel-REST-Sensoren (Glances-API, ein Feld pro Request, dadurch bleibt
+ * jedes Attribut klein genug fürs HA-Limit, selbst bei hunderten Prozessen):
+ *
+ * rest:
+ *   - resource: "http://<glances-host>:61208/api/4/processlist/pid"
+ *     scan_interval: 10
+ *     sensor:
+ *       - name: "HA Process PIDs"
+ *         unique_id: ha_process_pids
+ *         value_template: "{{ value_json.pid | length }}"
+ *         json_attributes_path: "$"
+ *         json_attributes: [pid]
+ *   # ... analog für name, cpu_percent, memory_percent
  */
 
 const DEFAULT_MINUTES = 10;
@@ -321,10 +357,31 @@ class ResourceMonitorCard extends HTMLElement {
     const hasNetworkOut = !!ents.network_out;
     const cpuCores = Array.isArray(ents.cpu_cores) ? ents.cpu_cores.filter(Boolean) : [];
     const processesEntity = ents.processes || "";
+    const processesSplit = {
+      pid: (ents.processes_pid || "").trim(),
+      name: (ents.processes_name || "").trim(),
+      cpu: (ents.processes_cpu || "").trim(),
+      mem: (ents.processes_mem || "").trim(),
+    };
+    const processesSplitMode = !!(
+      processesSplit.pid &&
+      processesSplit.name &&
+      processesSplit.cpu &&
+      processesSplit.mem
+    );
 
     const entityToKey = {};
+    const nonBufferedKeys = new Set([
+      "temperature",
+      "cpu_cores",
+      "processes",
+      "processes_pid",
+      "processes_name",
+      "processes_cpu",
+      "processes_mem",
+    ]);
     Object.entries(ents).forEach(([key, id]) => {
-      if (id && key !== "temperature" && key !== "cpu_cores" && key !== "processes") {
+      if (id && !nonBufferedKeys.has(key)) {
         entityToKey[id] = key;
       }
     });
@@ -344,6 +401,8 @@ class ResourceMonitorCard extends HTMLElement {
       hasNetworkOut,
       cpuCores,
       processesEntity,
+      processesSplit,
+      processesSplitMode,
       entityToKey,
       buffers,
       historyRequested: false,
@@ -386,6 +445,13 @@ class ResourceMonitorCard extends HTMLElement {
       { pid: "pid", name: "name", cpu: "cpu", mem: "mem" },
       config.processes_fields || {}
     );
+    // Split-Modus: siehe Kopfkommentar. Feldnamen innerhalb der 4 flachen
+    // Arrays sind global (nicht pro Server), da sie von der Datenquelle
+    // (z.B. Glances-API-Version) abhängen, nicht vom Server selbst.
+    this._processesSplitAttributes = Object.assign(
+      { pid: "pid", name: "name", cpu: "cpu_percent", mem: "memory_percent" },
+      config.processes_split_attributes || {}
+    );
 
     this._showCpu = config.show_cpu !== false;
     this._showMemory = config.show_memory !== false;
@@ -413,7 +479,7 @@ class ResourceMonitorCard extends HTMLElement {
 
   _visibleProcesses() {
     const s = this._active();
-    return this._showProcessesFlag && !!s.processesEntity;
+    return this._showProcessesFlag && (!!s.processesEntity || s.processesSplitMode);
   }
 
   _setActiveServer(index) {
@@ -913,12 +979,50 @@ class ResourceMonitorCard extends HTMLElement {
     if (sortRamBtn) sortRamBtn.classList.toggle("active", this._procSort === "mem");
   }
 
+  // Liest 4 flache Arrays (je eine Entity/ein Attribut, Split-Modus) und
+  // führt sie index-basiert zu Objekten zusammen. Funktioniert nur
+  // zuverlässig, wenn alle 4 Sensoren vom selben Request-Zyklus stammen
+  // (z.B. 4 REST-Sensoren auf denselben Endpoint mit gleichem scan_interval).
+  _buildSplitProcessList(server) {
+    const s = server.processesSplit;
+    const a = this._processesSplitAttributes;
+    const getArray = (entityId, attr) => {
+      const state = this._hass.states[entityId];
+      const v = state && state.attributes && state.attributes[attr];
+      return Array.isArray(v) ? v : [];
+    };
+    const pids = getArray(s.pid, a.pid);
+    const names = getArray(s.name, a.name);
+    const cpus = getArray(s.cpu, a.cpu);
+    const mems = getArray(s.mem, a.mem);
+    const n = pids.length;
+    const list = [];
+    for (let i = 0; i < n; i++) {
+      list.push({
+        pid: pids[i],
+        name: names[i] !== undefined ? names[i] : "",
+        cpu: cpus[i] !== undefined ? cpus[i] : 0,
+        mem: mems[i] !== undefined ? mems[i] : 0,
+      });
+    }
+    return list;
+  }
+
   _renderProcessTable() {
     const tbody = this.shadowRoot.getElementById("proc-tbody");
     if (!tbody || !this._hass) return;
-    const state = this._hass.states[this._active().processesEntity];
-    const list = (state && state.attributes && state.attributes[this._processesAttribute]) || [];
-    const f = this._processesFields;
+
+    const server = this._active();
+    let list;
+    let f;
+    if (server.processesSplitMode) {
+      list = this._buildSplitProcessList(server);
+      f = { pid: "pid", name: "name", cpu: "cpu", mem: "mem" };
+    } else {
+      const state = this._hass.states[server.processesEntity];
+      list = (state && state.attributes && state.attributes[this._processesAttribute]) || [];
+      f = this._processesFields;
+    }
     const sortKey = f[this._procSort];
     const sorted = Array.isArray(list)
       ? [...list].sort((a, b) => (Number(b[sortKey]) || 0) - (Number(a[sortKey]) || 0))

@@ -61,13 +61,15 @@ processes_attribute: processes                # optional, default: "processes"
 | `entities.cpu_cores` | no | List of entities for per-core CPU usage (own history chart) |
 | `entities.processes` | no | Entity whose attribute holds the process list (see below); enables the "Processes" button |
 | `processes_attribute` | no | Name of the attribute holding the process list (default: `processes`) |
+| `entities.processes_pid` / `_name` / `_cpu` / `_mem` | no | Split mode alternative to `entities.processes`, for sources that can't put the full process list into one attribute (see "Process list popup" below) |
+| `processes_split_attributes` | no | Maps the four split-mode fields above to their actual attribute names (default: `pid`, `name`, `cpu_percent`, `memory_percent`) |
 | `servers` | no | List of multiple servers instead of a single `entities:` block (see "Multiple servers" below) |
 | `show_cpu` | no | Show the CPU chart (default: `true`) |
 | `show_cores` | no | Show the CPU cores chart, if `entities.cpu_cores` is set (default: `true`) |
 | `show_memory` | no | Show the RAM/Swap chart (default: `true`) |
 | `show_network` | no | Show the network chart, if network entities are set (default: `true`) |
 | `show_temperature` | no | Show the temperature badge, if `entities.temperature` is set (default: `true`) |
-| `show_processes` | no | Show the processes button, if `entities.processes` is set (default: `true`) |
+| `show_processes` | no | Show the processes button, if `entities.processes` (or the split-mode entities) is set (default: `true`) |
 
 Every chart (and the processes button) can be toggled independently — either via `show_*` flags in YAML or in the visual editor under "Visibility". This lets
 everyone put together their own selection without removing entities.
@@ -89,7 +91,8 @@ numeric-state `sensor.*`, works well.
 - Temperature badge top-right in the header, colored by threshold
 - CPU and RAM line color changes with usage (green/orange/red)
 - A "Processes" button opens a popup listing every process, sortable by CPU or
-  RAM usage, in a scrollable table (see below)
+  RAM usage, in a scrollable table (see below), with an alternative "split
+  mode" for sources that can't expose the whole list through a single entity
 - Optional support for multiple servers/devices with a switch button per
   server in the header — only one is shown at a time, but all of them keep
   collecting live and history data in the background (see below)
@@ -104,11 +107,11 @@ numeric-state `sensor.*`, works well.
 
 Instead of a single `entities:` block, you can configure a `servers:` list.
 Each entry has its own name and its own `entities:` block (same schema as
-above, including `cpu_cores` and `processes`). From two entries onward, a row
-of switch buttons appears at the top of the card — only one server is shown
-at a time, but **all** configured servers keep collecting live and history
-data in the background, so switching shows an already-filled chart instantly
-instead of starting empty.
+above, including `cpu_cores` and `processes`, in either simple or split
+mode). From two entries onward, a row of switch buttons appears at the top of
+the card — only one server is shown at a time, but **all** configured servers
+keep collecting live and history data in the background, so switching shows
+an already-filled chart instantly instead of starting empty.
 
 `thresholds`, `temperature_thresholds` and the `show_*` visibility flags stay
 global and apply to whichever server is currently selected; only the entities
@@ -285,7 +288,10 @@ END { printf "]}\n" }
 ```
 
 Sorting by CPU or RAM in the popup is handled by the card itself — the script
-deliberately returns every process, unfiltered.
+deliberately returns every process, unfiltered. Note that `ps` needs to be
+available wherever this script runs; on Home Assistant OS, the Core container
+itself usually does **not** have it (see "Split mode" below for a setup, e.g.
+with Glances, that avoids relying on `ps` inside Core entirely).
 
 **2. Sensor in `configuration.yaml`**:
 
@@ -319,6 +325,96 @@ only refreshes while the popup is open, so it doesn't cost anything in the
 background. Without `entities.processes` configured, the button simply stays
 hidden.
 
+### Split mode (for hosts with many processes)
+
+Home Assistant caps entity attributes at roughly 16 KB. A verbose process
+list — for example from [Glances](https://nicolargo.github.io/glances/), which
+includes `cpu_times`, `memory_info`, `io_counters`, `cmdline` and more per
+process — can exceed that once a host runs more than a couple hundred
+processes (easy to reach with Docker, dev tooling, etc.). When that happens,
+the sensor holding the full list becomes `unavailable` and the popup stays
+empty.
+
+The fix is to split the data into four small, flat arrays — one per field —
+instead of one big nested list. Each array alone stays well under the limit
+regardless of process count, since it holds only numbers or short strings.
+The card reassembles them into rows itself at render time, matched by index,
+so all four must come from the same update cycle (same `scan_interval`).
+
+With Glances, its REST API already exposes each field as its own endpoint,
+so no custom script or `template:` sensor is needed — four small `rest:`
+sensors are enough:
+
+```yaml
+rest:
+  - resource: "http://<glances-host>:61208/api/4/processlist/pid"
+    scan_interval: 10
+    sensor:
+      - name: "Process PIDs"
+        unique_id: process_pids
+        value_template: "{{ value_json.pid | length }}"
+        json_attributes_path: "$"
+        json_attributes: [pid]
+
+  - resource: "http://<glances-host>:61208/api/4/processlist/name"
+    scan_interval: 10
+    sensor:
+      - name: "Process Names"
+        unique_id: process_names
+        value_template: "{{ value_json.name | length }}"
+        json_attributes_path: "$"
+        json_attributes: [name]
+
+  - resource: "http://<glances-host>:61208/api/4/processlist/cpu_percent"
+    scan_interval: 10
+    sensor:
+      - name: "Process CPU"
+        unique_id: process_cpu
+        value_template: "{{ value_json.cpu_percent | length }}"
+        json_attributes_path: "$"
+        json_attributes: [cpu_percent]
+
+  - resource: "http://<glances-host>:61208/api/4/processlist/memory_percent"
+    scan_interval: 10
+    sensor:
+      - name: "Process Memory"
+        unique_id: process_memory
+        value_template: "{{ value_json.memory_percent | length }}"
+        json_attributes_path: "$"
+        json_attributes: [memory_percent]
+```
+
+(Add `username`, `password` and `authentication: basic` to each of the four
+if your Glances instance requires it.)
+
+In the card:
+
+```yaml
+entities:
+  processes_pid: sensor.process_pids
+  processes_name: sensor.process_names
+  processes_cpu: sensor.process_cpu
+  processes_mem: sensor.process_memory
+```
+
+`processes_split_attributes` lets you remap the four logical fields (`pid`,
+`name`, `cpu`, `mem`) to whatever attribute name each entity actually uses, in
+case your source doesn't match Glances' own naming:
+
+```yaml
+processes_split_attributes:
+  pid: pid
+  name: name
+  cpu: cpu_percent
+  mem: memory_percent
+```
+
+These are already the defaults, so you only need this if your field names
+differ. Split mode is configured per server entry (see "Multiple servers"
+above) and is independent of `entities.processes` / `processes_attribute` —
+a `servers:` setup can freely mix simple mode on one server and split mode on
+another.
+
 ## Visual editor
 
 The card can be fully configured through the Lovelace UI (no YAML needed):
@@ -328,7 +424,9 @@ sensors, fields for title and time window, the CPU/RAM and temperature
 thresholds, and a "+ Add server" button to turn a single-server setup into a
 multi-server one (with a name field and a "Remove server" button per entry).
 When first added, the card also tries to suggest matching System Monitor
-entities automatically (`getStubConfig`).
+entities automatically (`getStubConfig`). Split-mode process entities
+(`processes_pid`/`_name`/`_cpu`/`_mem`) and `processes_split_attributes` are
+YAML-only for now, with no dedicated editor fields yet.
 
 YAML mode remains fully available and equivalent (see above).
 

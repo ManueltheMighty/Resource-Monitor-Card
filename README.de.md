@@ -62,13 +62,15 @@ processes_attribute: processes                # optional, Standard: "processes"
 | `entities.cpu_cores` | nein | Liste von Entities für die Auslastung pro CPU-Core (eigener Verlaufsgraph) |
 | `entities.processes` | nein | Entity, deren Attribut die Prozessliste enthält (siehe unten); schaltet den „Prozesse"-Button frei |
 | `processes_attribute` | nein | Name des Attributs mit der Prozessliste (Standard: `processes`) |
+| `entities.processes_pid` / `_name` / `_cpu` / `_mem` | nein | Split-Modus als Alternative zu `entities.processes`, für Quellen, die die komplette Prozessliste nicht in einem Attribut unterbringen können (siehe „Prozess-Popup" unten) |
+| `processes_split_attributes` | nein | Ordnet die vier Split-Modus-Felder oben den tatsächlichen Attributnamen zu (Standard: `pid`, `name`, `cpu_percent`, `memory_percent`) |
 | `servers` | nein | Liste mehrerer Server statt eines einzelnen `entities:`-Blocks (siehe „Mehrere Server" unten) |
 | `show_cpu` | nein | CPU-Graph anzeigen (Standard: `true`) |
 | `show_cores` | nein | CPU-Cores-Graph anzeigen, sofern `entities.cpu_cores` gesetzt ist (Standard: `true`) |
 | `show_memory` | nein | RAM/Swap-Graph anzeigen (Standard: `true`) |
 | `show_network` | nein | Netzwerk-Graph anzeigen, sofern Netzwerk-Entities gesetzt sind (Standard: `true`) |
 | `show_temperature` | nein | Temperatur-Badge anzeigen, sofern `entities.temperature` gesetzt ist (Standard: `true`) |
-| `show_processes` | nein | Prozess-Button anzeigen, sofern `entities.processes` gesetzt ist (Standard: `true`) |
+| `show_processes` | nein | Prozess-Button anzeigen, sofern `entities.processes` (oder die Split-Modus-Entities) gesetzt ist (Standard: `true`) |
 
 Jeder Graph (und der Prozess-Button) lässt sich also unabhängig ein-/ausblenden –
 entweder per `show_*`-Flag in der YAML-Konfiguration oder im visuellen Editor
@@ -92,7 +94,9 @@ oder ein anderer `sensor.*` mit numerischem Zustand.
 - Temperatur-Badge oben rechts im Header, farbig nach Schwellenwert
 - Linienfarbe von CPU und RAM wechselt je nach Auslastung (grün/orange/rot)
 - „Prozesse"-Button öffnet ein Popup mit allen Prozessen, sortierbar nach CPU-
-  oder RAM-Auslastung, in einer scrollbaren Tabelle (siehe unten)
+  oder RAM-Auslastung, in einer scrollbaren Tabelle (siehe unten), mit einem
+  alternativen „Split-Modus" für Quellen, die die komplette Liste nicht über
+  eine einzelne Entity bereitstellen können
 - Optionale Unterstützung mehrerer Server/Geräte mit einem Umschalt-Button
   pro Server im Header – es wird immer nur einer gleichzeitig angezeigt, aber
   alle sammeln im Hintergrund weiter Live- und History-Daten (siehe unten)
@@ -107,11 +111,12 @@ oder ein anderer `sensor.*` mit numerischem Zustand.
 
 Statt eines einzelnen `entities:`-Blocks kann eine Liste `servers:` angegeben
 werden. Jeder Eintrag hat einen eigenen Namen und einen eigenen `entities:`-
-Block (gleiches Schema wie oben, inkl. `cpu_cores` und `processes`). Ab zwei
-Einträgen erscheint oben in der Karte eine Button-Leiste zum Umschalten – es
-wird immer nur ein Server gleichzeitig angezeigt, aber **alle** konfigurierten
-Server sammeln im Hintergrund durchgehend Live- und History-Daten, damit beim
-Umschalten sofort ein gefüllter Verlauf da ist, statt leer zu starten.
+Block (gleiches Schema wie oben, inkl. `cpu_cores` und `processes`, in
+einfachem oder Split-Modus). Ab zwei Einträgen erscheint oben in der Karte
+eine Button-Leiste zum Umschalten – es wird immer nur ein Server gleichzeitig
+angezeigt, aber **alle** konfigurierten Server sammeln im Hintergrund
+durchgehend Live- und History-Daten, damit beim Umschalten sofort ein
+gefüllter Verlauf da ist, statt leer zu starten.
 
 `thresholds`, `temperature_thresholds` und die `show_*`-Sichtbarkeits-Flags
 bleiben weiterhin global und gelten für den jeweils ausgewählten Server; nur
@@ -289,7 +294,11 @@ END { printf "]}\n" }
 ```
 
 Die Sortierung nach CPU oder RAM im Popup übernimmt die Karte selbst – das
-Skript liefert bewusst alle Prozesse ungefiltert zurück.
+Skript liefert bewusst alle Prozesse ungefiltert zurück. Wichtig: `ps` muss
+dort verfügbar sein, wo das Skript läuft – auf Home Assistant OS hat der
+Core-Container selbst es in der Regel **nicht** (siehe „Split-Modus" unten
+für ein Setup, z. B. mit Glances, das ganz ohne `ps` innerhalb von Core
+auskommt).
 
 **2. Sensor in `configuration.yaml`**:
 
@@ -323,6 +332,97 @@ die beiden Buttons oben schalten die Sortierung zwischen CPU- und
 RAM-Auslastung um. Die Tabelle aktualisiert sich nur, solange das Popup
 geöffnet ist, kostet im Hintergrund also nichts. Ohne konfigurierte `entities.processes` bleibt der Button einfach ausgeblendet.
 
+### Split-Modus (für Hosts mit vielen Prozessen)
+
+Home Assistant begrenzt Entity-Attribute auf ca. 16 KB. Eine ausführliche
+Prozessliste – etwa von [Glances](https://nicolargo.github.io/glances/), das
+pro Prozess u. a. `cpu_times`, `memory_info`, `io_counters` und `cmdline`
+mitliefert – kann das überschreiten, sobald ein Host mehr als ein paar
+hundert Prozesse hat (leicht erreicht z. B. durch Docker, Dev-Tooling etc.).
+In dem Fall wird der Sensor mit der vollen Liste „nicht verfügbar", und das
+Popup bleibt leer.
+
+Die Lösung: die Daten in vier kleine, flache Arrays aufteilen – eins pro
+Feld – statt einer großen verschachtelten Liste. Jedes Array bleibt für sich
+genommen unabhängig von der Prozessanzahl deutlich unter dem Limit, da es nur
+Zahlen bzw. kurze Strings enthält. Die Karte setzt die Zeilen beim Rendern
+selbst zusammen, index-basiert – daher müssen alle vier aus demselben
+Aktualisierungszyklus stammen (gleicher `scan_interval`).
+
+Bei Glances liefert dessen REST-API jedes Feld bereits als eigenen Endpunkt,
+daher ist kein eigenes Skript oder `template:`-Sensor nötig – vier schlanke
+`rest:`-Sensoren reichen:
+
+```yaml
+rest:
+  - resource: "http://<glances-host>:61208/api/4/processlist/pid"
+    scan_interval: 10
+    sensor:
+      - name: "Process PIDs"
+        unique_id: process_pids
+        value_template: "{{ value_json.pid | length }}"
+        json_attributes_path: "$"
+        json_attributes: [pid]
+
+  - resource: "http://<glances-host>:61208/api/4/processlist/name"
+    scan_interval: 10
+    sensor:
+      - name: "Process Names"
+        unique_id: process_names
+        value_template: "{{ value_json.name | length }}"
+        json_attributes_path: "$"
+        json_attributes: [name]
+
+  - resource: "http://<glances-host>:61208/api/4/processlist/cpu_percent"
+    scan_interval: 10
+    sensor:
+      - name: "Process CPU"
+        unique_id: process_cpu
+        value_template: "{{ value_json.cpu_percent | length }}"
+        json_attributes_path: "$"
+        json_attributes: [cpu_percent]
+
+  - resource: "http://<glances-host>:61208/api/4/processlist/memory_percent"
+    scan_interval: 10
+    sensor:
+      - name: "Process Memory"
+        unique_id: process_memory
+        value_template: "{{ value_json.memory_percent | length }}"
+        json_attributes_path: "$"
+        json_attributes: [memory_percent]
+```
+
+(Falls deine Glances-Instanz Zugangsdaten verlangt, bei allen vier zusätzlich
+`username`, `password` und `authentication: basic` ergänzen.)
+
+In der Karte:
+
+```yaml
+entities:
+  processes_pid: sensor.process_pids
+  processes_name: sensor.process_names
+  processes_cpu: sensor.process_cpu
+  processes_mem: sensor.process_memory
+```
+
+Mit `processes_split_attributes` lassen sich die vier logischen Felder
+(`pid`, `name`, `cpu`, `mem`) auf die tatsächlichen Attributnamen deiner
+Quelle abbilden, falls diese nicht Glances' Benennung entsprechen:
+
+```yaml
+processes_split_attributes:
+  pid: pid
+  name: name
+  cpu: cpu_percent
+  mem: memory_percent
+```
+
+Das sind bereits die Standardwerte, du brauchst das also nur, wenn deine
+Feldnamen abweichen. Der Split-Modus wird pro Server-Eintrag konfiguriert
+(siehe „Mehrere Server" oben) und ist unabhängig von `entities.processes` /
+`processes_attribute` – ein `servers:`-Setup kann auf einem Server den
+einfachen Modus und auf einem anderen den Split-Modus nutzen.
+
 ## Visueller Editor
 
 Die Karte lässt sich komplett über die Lovelace-UI konfigurieren (kein YAML nötig):
@@ -333,7 +433,10 @@ Schwellenwerte für CPU/RAM und Temperatur, sowie einen „+ Server hinzufügen"
 Button, der eine Einzelserver-Konfiguration in eine Mehrserver-Konfiguration
 umwandelt (mit Namensfeld und „Server entfernen"-Button pro Eintrag). Beim
 erstmaligen Hinzufügen versucht die Karte zusätzlich, passende
-System-Monitor-Entities automatisch vorzuschlagen (`getStubConfig`).
+System-Monitor-Entities automatisch vorzuschlagen (`getStubConfig`). Die
+Split-Modus-Prozess-Entities (`processes_pid`/`_name`/`_cpu`/`_mem`) und
+`processes_split_attributes` sind aktuell nur per YAML konfigurierbar, noch
+ohne eigene Editor-Felder.
 
 Der YAML-Modus bleibt weiterhin verfügbar und identisch nutzbar (siehe oben).
 
