@@ -2,6 +2,10 @@
 
 *[Deutsche Version](https://github.com/ManueltheMighty/Resource-Monitor-Card/blob/main/README.de.md)*
 
+<img width="426" height="516" alt="image" src="https://github.com/user-attachments/assets/a14dfbca-54b8-4ed9-970a-bbe9bca35b6a" />
+<img width="499" height="846" alt="image" src="https://github.com/user-attachments/assets/ad3a2484-3425-49f0-80f4-759f6e60bb77" />
+<img width="622" height="867" alt="image" src="https://github.com/user-attachments/assets/349a4e15-3d89-4d58-b037-fc42e9cb4fce" />
+
 A Home Assistant Lovelace custom card in the style of a Linux resource monitor.
 Shows CPU, RAM/Swap usage and network in/out as live line charts with axes and
 a grid, plus an optional temperature badge and a process list popup.
