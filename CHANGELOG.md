@@ -4,6 +4,13 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## 1.3.1
+
+### Changed
+
+* Documentation for hosts with many processes now recommends excluding the process-list sensor(s) from the Recorder (`recorder: exclude:`) instead of the split-mode setup from 1.3.0. In practice, Home Assistant holds and serves a large process-list attribute fine as a live state (which is all the card reads); it's the Recorder's attempt to persist it to the database that causes the overhead and log warnings. Excluding the entity is simpler and works the same on both Glances API v3 and v4.
+* The split-mode config (`entities.processes_pid`/`_name`/`_cpu`/`_mem`, `processes_split_attributes`) added in 1.3.0 remains in the card, but is no longer documented in the README — it proved harder to set up correctly in practice than the Recorder-exclude approach above.
+
 ## 1.3.0
 
 ### Added
